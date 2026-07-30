@@ -650,6 +650,31 @@ def _gpif_left_fingering(note_el) -> int:
     return _GPIF_LEFT_FINGERING_MAP.get(raw, -1)
 
 
+def _gpif_pick_direction(beat_el) -> int:
+    """Read a GPIF <Beat>'s stroke direction (<Beat><Stroke><Direction>Up|Down
+    </Direction></Stroke></Beat>) -> RS pick_direction int (-1 unset, 0 down,
+    1 up — mirrors gp2rs.py's _gp_pick_direction / song.py's Note.pick_direction).
+
+    NOTE: unlike _gpif_left_fingering (verified against real GP8 exports),
+    this <Stroke>/<Direction> shape is based on the general GPIF schema
+    convention, not a confirmed real export — if a real file's tag differs,
+    this fails safe (returns -1, same as absent) rather than raising, so
+    getting the exact tag wrong costs a missed direction, not a crash.
+
+    Returns -1 (unset) when the <Stroke> element is absent or the direction
+    text is unrecognised — never fabricates a direction, same posture as
+    _gpif_left_fingering above."""
+    stroke_el = beat_el.find('Stroke')
+    if stroke_el is None:
+        return -1
+    raw = (stroke_el.findtext('Direction') or '').strip().lower()
+    if raw == 'down':
+        return 0
+    if raw == 'up':
+        return 1
+    return -1
+
+
 def _rs_string_order(string_pitches: list[int]) -> dict[int, int]:
     """Map each GPIF string index → RS string index (0 = lowest pitch).
 
@@ -1771,6 +1796,10 @@ def convert_file(
 
                             dur = _beat_dur_secs(beat_el, rhythms_dict, _cur_tempo)
                             t = voice_time + audio_offset
+                            # A stroke is one pick gesture across the whole
+                            # beat, so read it once per beat rather than per
+                            # note — mirrors gp2rs.py's per-beat pickStroke.
+                            _beat_pick_dir = _gpif_pick_direction(beat_el)
 
                             notes_text = beat_el.findtext('Notes', '').strip()
                             if notes_text:
@@ -1856,6 +1885,7 @@ def convert_file(
                                         string=rs_str,
                                         fret=rs_fret,
                                         sustain=sustain,
+                                        pick_direction=_beat_pick_dir if not (is_drum or is_keys) else -1,
                                     )
 
                                     # Techniques — GPIF stores these as <Property>

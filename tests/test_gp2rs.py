@@ -1250,6 +1250,89 @@ def test_single_note_open_finger_omits_fg():
     assert "fg" not in note_to_wire(_parse_note(xn))
 
 
+def test_single_note_down_stroke_imports_as_pkd_0():
+    """A GP beat's pickStroke=down imports as pickDirection=0 and survives
+    convert_track XML -> _parse_note -> note_to_wire as pkd=0 (issue: GP import
+    discards strumming direction)."""
+    from song import _parse_note, note_to_wire
+    note = _ct_note(guitarpro.NoteType.normal, gp_string=2, fret=5)
+    beat = _ct_beat(tick=0, dur_value=4, notes=[note])
+    beat.effect.pickStroke = guitarpro.BeatStrokeDirection.down
+
+    root = ET.fromstring(convert_track(_ct_song([beat]), track_index=0))  # noqa: S314
+    xn = root.findall(".//notes/note")[0]
+    assert xn.get("pickDirection") == "0"
+    assert note_to_wire(_parse_note(xn))["pkd"] == 0
+
+
+def test_single_note_up_stroke_imports_as_pkd_1():
+    from song import _parse_note, note_to_wire
+    note = _ct_note(guitarpro.NoteType.normal, gp_string=2, fret=5)
+    beat = _ct_beat(tick=0, dur_value=4, notes=[note])
+    beat.effect.pickStroke = guitarpro.BeatStrokeDirection.up
+
+    root = ET.fromstring(convert_track(_ct_song([beat]), track_index=0))  # noqa: S314
+    xn = root.findall(".//notes/note")[0]
+    assert xn.get("pickDirection") == "1"
+    assert note_to_wire(_parse_note(xn))["pkd"] == 1
+
+
+def test_note_no_stroke_omits_pick_direction():
+    """No pickStroke effect (or BeatStrokeDirection.none) leaves pickDirection
+    unset — no fabricated direction, matching the fretFinger no-op convention."""
+    from song import _parse_note, note_to_wire
+    note = _ct_note(guitarpro.NoteType.normal, gp_string=2, fret=5)
+    beat = _ct_beat(tick=0, dur_value=4, notes=[note])
+    beat.effect.pickStroke = guitarpro.BeatStrokeDirection.none
+
+    root = ET.fromstring(convert_track(_ct_song([beat]), track_index=0))  # noqa: S314
+    xn = root.findall(".//notes/note")[0]
+    assert xn.get("pickDirection") is None
+    assert "pkd" not in note_to_wire(_parse_note(xn))
+
+
+def test_note_missing_pick_stroke_attr_omits_pick_direction():
+    """Beats built without a pickStroke attribute at all (the pre-fix mock
+    shape, and older pyguitarpro effect objects) must not raise — getattr
+    falls back to 'no stroke' rather than an AttributeError."""
+    note = _ct_note(guitarpro.NoteType.normal, gp_string=2, fret=5)
+    beat = _ct_beat(tick=0, dur_value=4, notes=[note])  # no .effect.pickStroke
+
+    root = ET.fromstring(convert_track(_ct_song([beat]), track_index=0))  # noqa: S314
+    xn = root.findall(".//notes/note")[0]
+    assert xn.get("pickDirection") is None
+
+
+def test_chord_notes_all_share_the_beats_single_stroke_direction():
+    """A stroke is one pick gesture across the whole chord — every chordNote
+    in the beat gets the same pickDirection, not just the first."""
+    note_e = _ct_note(guitarpro.NoteType.normal, gp_string=1, fret=3)
+    note_b = _ct_note(guitarpro.NoteType.normal, gp_string=2, fret=2)
+    beat = _ct_beat(tick=0, dur_value=4, notes=[note_e, note_b])
+    beat.effect.pickStroke = guitarpro.BeatStrokeDirection.up
+
+    xml_str = convert_track(_ct_song([beat]), track_index=0)
+    root = ET.fromstring(xml_str)  # noqa: S314
+    chord_notes = root.findall(".//chords/chord/chordNote")
+    assert len(chord_notes) == 2
+    assert all(cn.get("pickDirection") == "1" for cn in chord_notes)
+
+
+def test_chord_element_has_no_dead_strum_attribute():
+    """The old hardcoded strum="down" chord attribute was never read by
+    song.py's parser — dropped as dead output rather than fixed in place,
+    since real direction now lives per-note on pickDirection."""
+    note_e = _ct_note(guitarpro.NoteType.normal, gp_string=1, fret=3)
+    note_b = _ct_note(guitarpro.NoteType.normal, gp_string=2, fret=2)
+    beat = _ct_beat(tick=0, dur_value=4, notes=[note_e, note_b])
+
+    xml_str = convert_track(_ct_song([beat]), track_index=0)
+    root = ET.fromstring(xml_str)  # noqa: S314
+    chord_el = root.find(".//chords/chord")
+    assert chord_el is not None
+    assert chord_el.get("strum") is None
+
+
 def test_chord_without_diagram_has_blank_fingers():
     # A plain two-note chord (effect.chord is None) is unchanged: blank name,
     # all-(-1) fingers — no regression for diagram-less charts.

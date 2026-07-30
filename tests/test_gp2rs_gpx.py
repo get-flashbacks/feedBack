@@ -34,6 +34,7 @@ from gp2rs_gpx import (
     _resolve_pending_slides,
     _gpx_bend_shape,
     _gpif_left_fingering,
+    _gpif_pick_direction,
 )
 from gp2rs import RsNote
 
@@ -913,6 +914,27 @@ def test_gpif_left_fingering_absent_or_unknown_is_unset():
         ET.fromstring('<Note id="1"><LeftFingering>Z</LeftFingering></Note>')) == -1
     assert _gpif_left_fingering(
         ET.fromstring('<Note id="1"><LeftFingering></LeftFingering></Note>')) == -1
+
+
+# ── _gpif_pick_direction (GP6/7/8 beat stroke direction -> pick_direction) ───
+
+@pytest.mark.parametrize("direction, expected", [
+    ("Down", 0), ("down", 0), ("Up", 1), ("up", 1),
+])
+def test_gpif_pick_direction_recognised(direction, expected):
+    b = ET.fromstring(f'<Beat id="1"><Stroke><Direction>{direction}</Direction>'
+                      '</Stroke><Rhythm ref="r0"/></Beat>')
+    assert _gpif_pick_direction(b) == expected
+
+
+def test_gpif_pick_direction_absent_or_unknown_is_unset():
+    # No <Stroke> child, or an unrecognised direction -> -1 (never fabricate).
+    assert _gpif_pick_direction(ET.fromstring('<Beat id="1"><Rhythm ref="r0"/></Beat>')) == -1
+    assert _gpif_pick_direction(
+        ET.fromstring('<Beat id="1"><Stroke><Direction>Sideways</Direction>'
+                      '</Stroke></Beat>')) == -1
+    assert _gpif_pick_direction(
+        ET.fromstring('<Beat id="1"><Stroke></Stroke></Beat>')) == -1
 
 
 # ── convert_file: GP8 chord-diagram name + fingering extraction (E3) ─────────
