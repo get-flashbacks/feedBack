@@ -35,6 +35,7 @@ from gp2rs_gpx import (
     _gpx_bend_shape,
     _gpif_left_fingering,
     _gpif_pick_direction,
+    _gpif_track_capo,
 )
 from gp2rs import RsNote
 
@@ -935,6 +936,29 @@ def test_gpif_pick_direction_absent_or_unknown_is_unset():
                       '</Stroke></Beat>')) == -1
     assert _gpif_pick_direction(
         ET.fromstring('<Beat id="1"><Stroke></Stroke></Beat>')) == -1
+
+
+# ── _gpif_track_capo (GP6/7/8 per-track capo, issue: always imported as 0) ──
+
+def test_gpif_track_capo_reads_capo_fret():
+    t = ET.fromstring(
+        '<Track><Staves><Staff><Properties>'
+        '<Property name="CapoFret"><Fret>3</Fret></Property>'
+        '</Properties></Staff></Staves></Track>')
+    assert _gpif_track_capo(t) == 3
+
+
+def test_gpif_track_capo_absent_is_zero():
+    assert _gpif_track_capo(ET.fromstring('<Track><Staves><Staff/></Staves></Track>')) == 0
+    assert _gpif_track_capo(None) == 0
+
+
+def test_gpif_track_capo_malformed_is_zero():
+    t = ET.fromstring(
+        '<Track><Staves><Staff><Properties>'
+        '<Property name="CapoFret"><Fret>not-a-number</Fret></Property>'
+        '</Properties></Staff></Staves></Track>')
+    assert _gpif_track_capo(t) == 0
 
 
 # ── convert_file: GP8 chord-diagram name + fingering extraction (E3) ─────────

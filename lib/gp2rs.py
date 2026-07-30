@@ -1131,13 +1131,24 @@ def convert_track(
         chord_templates=chord_templates,
         anchors=anchors,
         tempo=song.tempo,
+        capo=_gp_track_capo(track),
     )
+
+
+def _gp_track_capo(track) -> int:
+    """GP3/4/5 per-track capo fret. pyguitarpro exposes it as Track.offset.
+    Returns 0 (no capo) on any missing/malformed attribute — never fabricates
+    a capo, matching the fail-safe posture used throughout this module."""
+    try:
+        return max(0, int(getattr(track, "offset", 0) or 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _build_xml(
     title, artist, album, year, arrangement, tuning, num_strings,
     song_length, audio_offset, beats, sections, notes, chords,
-    chord_templates, anchors, tempo,
+    chord_templates, anchors, tempo, capo=0,
 ) -> str:
     root = ET.Element("song", version="7")
 
@@ -1168,7 +1179,14 @@ def _build_xml(
     tuning_el.set("stringCount", str(len(tuning)))
     for i in range(max(6, len(tuning))):
         tuning_el.set(f"string{i}", str(tuning[i] if i < len(tuning) else 0))
-    ET.SubElement(root, "capo").text = "0"
+    # Was hardcoded to "0" regardless of the source file's actual capo —
+    # every downstream consumer (editor, feedpakr) either silently imported
+    # capo=0 or had to independently patch it back in post-conversion (see
+    # feedpakr_pipeline.py's _capo_for_track/_gpif_capo_lookup, written
+    # because THIS was never fixed at the source). Fixed at the source now;
+    # callers pass the real value via the `capo` param (default 0 for the
+    # piano/drum paths, where GP has no capo concept at all).
+    ET.SubElement(root, "capo").text = str(int(capo))
 
     # Ebeats — write beat times at MICROSECOND (6-decimal) precision, not
     # millisecond (3-decimal). The editor/timeline DERIVES per-bar BPM from beat

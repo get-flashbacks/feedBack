@@ -800,20 +800,26 @@ def _ct_note(note_type, gp_string, fret):
     )
 
 
-def _ct_song(beats, string_values=None):
+def _ct_song(beats, string_values=None, offset=None):
     """One-measure mock song for convert_track, standard 6-string guitar at 120 BPM.
 
-    `string_values` overrides the tuning/string count (e.g. a 7-string track)."""
+    `string_values` overrides the tuning/string count (e.g. a 7-string track).
+    `offset` sets Track.offset (GP's per-track capo fret); omitted entirely
+    when None, matching real pyguitarpro tracks with no capo (mirrors
+    _gp_track_capo's getattr-with-default read)."""
     voice = SimpleNamespace(beats=beats)
     measure = SimpleNamespace(voices=[voice])
     strings = [SimpleNamespace(number=i + 1, value=v)
                for i, v in enumerate(string_values or [64, 59, 55, 50, 45, 40])]
-    track = SimpleNamespace(
+    track_kwargs = dict(
         strings=strings,
         channel=SimpleNamespace(instrument=24),
         measures=[measure],
         name="Guitar",
     )
+    if offset is not None:
+        track_kwargs["offset"] = offset
+    track = SimpleNamespace(**track_kwargs)
     mh = SimpleNamespace(
         start=0,
         number=1,
@@ -1316,6 +1322,35 @@ def test_chord_notes_all_share_the_beats_single_stroke_direction():
     chord_notes = root.findall(".//chords/chord/chordNote")
     assert len(chord_notes) == 2
     assert all(cn.get("pickDirection") == "1" for cn in chord_notes)
+
+
+def test_track_capo_imports_into_xml_and_arrangement(tmp_path):
+    """Track.offset (GP's per-track capo) survives convert_track XML ->
+    parse_arrangement as arr.capo, instead of the old hardcoded 0 (issue:
+    capo was always imported as 0 regardless of the source file)."""
+    from song import parse_arrangement
+    note = _ct_note(guitarpro.NoteType.normal, gp_string=2, fret=5)
+    beat = _ct_beat(tick=0, dur_value=4, notes=[note])
+
+    xml_str = convert_track(_ct_song([beat], offset=2), track_index=0)
+    root = ET.fromstring(xml_str)  # noqa: S314
+    assert root.find("capo").text == "2"
+
+    xml_path = tmp_path / "arr.xml"
+    xml_path.write_text(xml_str, encoding="utf-8")
+    arr = parse_arrangement(str(xml_path))
+    assert arr.capo == 2
+
+
+def test_track_no_offset_attr_imports_capo_zero():
+    """Track objects with no .offset at all (real pyguitarpro tracks with no
+    capo don't carry the attribute) must not raise, and import capo=0."""
+    note = _ct_note(guitarpro.NoteType.normal, gp_string=2, fret=5)
+    beat = _ct_beat(tick=0, dur_value=4, notes=[note])
+
+    xml_str = convert_track(_ct_song([beat]), track_index=0)  # no offset=
+    root = ET.fromstring(xml_str)  # noqa: S314
+    assert root.find("capo").text == "0"
 
 
 def test_chord_element_has_no_dead_strum_attribute():

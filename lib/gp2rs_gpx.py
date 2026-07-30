@@ -675,6 +675,24 @@ def _gpif_pick_direction(beat_el) -> int:
     return -1
 
 
+def _gpif_track_capo(track_el) -> int:
+    """GPIF per-track capo fret, at Track/Staves/Staff/Properties/
+    Property[@name='CapoFret']/Fret. GP6/7/8 GPIF has no Track.offset
+    equivalent to read here (unlike GP3-5's pyguitarpro Track.offset, see
+    gp2rs.py's _gp_track_capo) — this is the format's own field for it.
+
+    Returns 0 (no capo) when absent/malformed — never fabricates a capo."""
+    if track_el is None:
+        return 0
+    fret_el = track_el.find(".//Staves/Staff/Properties/Property[@name='CapoFret']/Fret")
+    if fret_el is None or not (fret_el.text or '').strip():
+        return 0
+    try:
+        return max(0, int(float(fret_el.text)))
+    except (TypeError, ValueError):
+        return 0
+
+
 def _rs_string_order(string_pitches: list[int]) -> dict[int, int]:
     """Map each GPIF string index → RS string index (0 = lowest pitch).
 
@@ -2122,6 +2140,9 @@ def convert_file(
             chord_templates=chord_templates,
             anchors=anchors,
             tempo=int(tempo_bpm),
+            # No capo concept for drums/keys (same reasoning as pick_direction
+            # above) — only guitar/bass tracks get a real lookup.
+            capo=0 if (is_drum or is_keys) else _gpif_track_capo(track.get('_el')),
         )
 
         # Inject tone change markers for guitar/bass tracks
