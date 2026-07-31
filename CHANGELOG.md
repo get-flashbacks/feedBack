@@ -8,6 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Core reader for source rigs (feedpak 1.18.0).** A pack can declare what a
+  MIDI part should sound like by binding a rig; core now reads that binding and
+  hands it to the client instead of dropping it. Three parts: the
+  `tone_changes` WS message carries the pack's rig bindings (`base_rig`, and
+  `rig` per change) alongside the tone names it already sent; the manifest
+  `rigs:` key loads the pack's rig library (`rigs.json`, spec §7.9) verbatim;
+  and the binding precedence is resolved per spec §5.1/§5.2 — a manifest
+  arrangement entry's `tones` replaces the arrangement JSON's **wholesale**
+  (no field-level merge), while top-level `drum_tones` binds the primary drum
+  part as the fallback a `type: drums` entry's own `tones` outranks. Core
+  deliberately stops there: it does not select a realization or apply the
+  `intent.gm` floor, which belong to whatever actually voices the part. Packs
+  that bind no rig produce a byte-identical `tone_changes` payload, so existing
+  consumers are unaffected.
+- **Opt-in career venue packs (#122)** — higher-tier venue crowd media
+  (`club`, `arena`) is no longer bundled; the app downloads each pack on demand
+  from its release when you reach the venue (sha256-verified), keeping the
+  starter `bar` venue bundled for offline play. Trims ~678 MB from the desktop
+  download; an unpublished pack shows "coming soon" and plays on the standard
+  stage until its release lands.
 - **Session-sync relay WebSocket — `/ws/sync/{session_id}` (#1030).** A
   deliberately dumb JSON fan-out room: a text frame received from one client is
   forwarded verbatim to every other client on the same session id; the server
@@ -293,6 +313,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   engine (`app.js`, `highway.js`, `playSong`, `showScreen`, the capability registry).
 
 ### Fixed
+- **Count-in follows the song's meter and its pickup measure.** The count-in
+  (loop wrap, section practice, and the "Countdown before song" setting) always
+  clicked exactly four beats, so a 3/4 song was counted in 4/4, and a song
+  opening with a pickup (anacrusis) had the pickup enter where the downbeat
+  belonged — putting the player a beat ahead for the whole song. The bar length
+  now comes from the `song_timeline` beats already on the highway
+  (`measure >= 0` marks downbeats; no new plumbing, since the `time_signatures`
+  map is streamed to plugins rather than stored in the frontend), and a first
+  bar shorter than that meter shortens the count by its length: a 1-beat pickup
+  in 4/4 counts "1 2 3" and the music enters on 4. Songs without beats — pre-chart,
+  minigames, synthetic highways — still get four.
 - **GP8 asset resolution honours the directory the registry named.**
   `<EmbeddedFilePath>` is matched on filename stem so a format variant of the
   same recording can win (an `.ogg` beside the declared `.mp3` is copied out
