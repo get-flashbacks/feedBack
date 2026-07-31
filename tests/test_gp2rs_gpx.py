@@ -34,6 +34,8 @@ from gp2rs_gpx import (
     _resolve_pending_slides,
     _gpx_bend_shape,
     _gpif_left_fingering,
+    _gpif_pick_direction,
+    _gpif_track_capo,
 )
 from gp2rs import RsNote
 
@@ -913,6 +915,82 @@ def test_gpif_left_fingering_absent_or_unknown_is_unset():
         ET.fromstring('<Note id="1"><LeftFingering>Z</LeftFingering></Note>')) == -1
     assert _gpif_left_fingering(
         ET.fromstring('<Note id="1"><LeftFingering></LeftFingering></Note>')) == -1
+
+
+# ── _gpif_pick_direction (GP6/7/8 chord-strum direction -> pick_direction) ───
+# Real schema (verified against real GP8 exports — a sample chart had 335
+# authored <Property name="Brush"> chord strums): Properties/
+# Property[name=Brush]/Direction is the direct GPIF equivalent of GP4/5's
+# beat.effect.stroke; <Arpeggio> (a direct <Beat> child) is a related
+# fallback. An earlier version of this helper guessed <Stroke><Direction>,
+# which doesn't exist in any real file — see gp2rs.py's analogous
+# .stroke-vs-.pickStroke fix for the GP4/5-side version of this same bug.
+
+@pytest.mark.parametrize("direction, expected", [
+    ("Down", 0), ("down", 0), ("Up", 1), ("up", 1),
+])
+def test_gpif_pick_direction_reads_brush_property(direction, expected):
+    b = ET.fromstring(
+        f'<Beat id="1"><Properties><Property name="Brush">'
+        f'<Direction>{direction}</Direction></Property></Properties>'
+        '<Rhythm ref="r0"/></Beat>')
+    assert _gpif_pick_direction(b) == expected
+
+
+@pytest.mark.parametrize("direction, expected", [
+    ("Down", 0), ("down", 0), ("Up", 1), ("up", 1),
+])
+def test_gpif_pick_direction_falls_back_to_arpeggio(direction, expected):
+    # No Brush property present — <Arpeggio> (a direct <Beat> child, not a
+    # Property) still carries a real chord-wide direction.
+    b = ET.fromstring(f'<Beat id="1"><Rhythm ref="r0"/><Arpeggio>{direction}'
+                      '</Arpeggio></Beat>')
+    assert _gpif_pick_direction(b) == expected
+
+
+def test_gpif_pick_direction_prefers_brush_over_arpeggio():
+    b = ET.fromstring(
+        '<Beat id="1"><Properties><Property name="Brush">'
+        '<Direction>Down</Direction></Property></Properties>'
+        '<Arpeggio>Up</Arpeggio></Beat>')
+    assert _gpif_pick_direction(b) == 0
+
+
+def test_gpif_pick_direction_absent_or_unknown_is_unset():
+    # No Brush/Arpeggio at all, or unrecognised text -> -1 (never fabricate).
+    assert _gpif_pick_direction(ET.fromstring('<Beat id="1"><Rhythm ref="r0"/></Beat>')) == -1
+    assert _gpif_pick_direction(
+        ET.fromstring('<Beat id="1"><Arpeggio>Sideways</Arpeggio></Beat>')) == -1
+    assert _gpif_pick_direction(
+        ET.fromstring('<Beat id="1"><Properties><Property name="Brush">'
+                      '<Direction></Direction></Property></Properties></Beat>')) == -1
+    # Other Properties (unrelated names) must not be mistaken for Brush.
+    assert _gpif_pick_direction(
+        ET.fromstring('<Beat id="1"><Properties><Property name="Slapped">'
+                      '<Enable/></Property></Properties></Beat>')) == -1
+
+
+# ── _gpif_track_capo (GP6/7/8 per-track capo, issue: always imported as 0) ──
+
+def test_gpif_track_capo_reads_capo_fret():
+    t = ET.fromstring(
+        '<Track><Staves><Staff><Properties>'
+        '<Property name="CapoFret"><Fret>3</Fret></Property>'
+        '</Properties></Staff></Staves></Track>')
+    assert _gpif_track_capo(t) == 3
+
+
+def test_gpif_track_capo_absent_is_zero():
+    assert _gpif_track_capo(ET.fromstring('<Track><Staves><Staff/></Staves></Track>')) == 0
+    assert _gpif_track_capo(None) == 0
+
+
+def test_gpif_track_capo_malformed_is_zero():
+    t = ET.fromstring(
+        '<Track><Staves><Staff><Properties>'
+        '<Property name="CapoFret"><Fret>not-a-number</Fret></Property>'
+        '</Properties></Staff></Staves></Track>')
+    assert _gpif_track_capo(t) == 0
 
 
 # ── convert_file: GP8 chord-diagram name + fingering extraction (E3) ─────────
