@@ -10,6 +10,20 @@ body:
       description: What should be accomplished?
     validations:
       required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - backend API / server.py
+        - frontend app / static
+        - chart import/export
+        - player/highway rendering
+        - plugin system
+        - Docker or deployment
+        - documentation
+    validations:
+      required: true
   - type: textarea
     id: scope
     attributes:
@@ -36,6 +50,7 @@ body:
     validations:
       required: true
   - type: textarea
-    id: notes
+    id: validation
     attributes:
-      label: Notes
+      label: Validation
+      placeholder: Run the app, exercise the affected route/screen/import path, and check console/server logs.
