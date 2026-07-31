@@ -5,7 +5,7 @@ services:
       - "8000:8000"
     volumes:
       # Mount your song library folder (adjust path for your system)
-      - ${LIBRARY_PATH:-./library}:/library
+      - ${LIBRARY_PATH:-./library}:/dlc
       # Persistent config and cache
       - feedBack-config:/config
       # Mount source for live reload during development
@@ -15,23 +15,10 @@ services:
       - ./ug_browser.py:/app/ug_browser.py
       - ./lib:/app/lib
       - ./plugins:/app/plugins
-      # Local-checkout plugins (sibling repos, not git submodules under
-      # ./plugins) — bind-mounted individually since a host NTFS junction
-      # inside ./plugins is not followed by Docker Desktop's WSL2 bind mount.
-      - ../feedBack-plugin-editor:/app/plugins/editor
-      - ../feedBack-plugin-lyrics-karaoke:/app/plugins/lyrics_karaoke
-      - ../feedBack-plugin-lyrics-sync:/app/plugins/lyrics_sync
-      - ../feedBack-plugin-musicxml-import:/app/plugins/musicxml_import
-      - ../feedBack-plugin-piano:/app/plugins/piano
-      - ../feedBack-plugin-sectionmap:/app/plugins/section_map
-      - ../feedBack-plugin-splitscreen:/app/plugins/splitscreen
-      - ../feedback-plugin-dynamic-difficulty:/app/plugins/dynamic_difficulty
-      - ../../feedBack-plugin-feedpaker:/app/plugins/feedpakr
-      - ../../feedBack-plugin-metronome:/app/plugins/metronome
       - ./.git:/app/.git:ro
     environment:
       - PYTHONPATH=/app/lib:/app
-      - LIBRARY_DIR=/library
+      - DLC_DIR=/dlc
       - CONFIG_DIR=/config
       # Write note_detect recordings to the host-visible bind mount (./static)
       # rather than the /config Docker volume: recorded takes (and training

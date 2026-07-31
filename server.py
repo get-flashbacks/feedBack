@@ -111,9 +111,9 @@ except OSError:
 # Distinguish "env not set / empty" from "explicitly set". Path("") collapses
 # to Path(".") so we can't recover that signal after the cast — capture the
 # raw env-var string up front and let _get_dlc_dir() consult both. This way
-# `LIBRARY_DIR=.` remains a valid opt-in for cwd while `LIBRARY_DIR=""` (or unset)
+# `DLC_DIR=.` remains a valid opt-in for cwd while `DLC_DIR=""` (or unset)
 # falls through to the config.json fallback.
-_DLC_DIR_ENV = os.environ.get("LIBRARY_DIR", "").strip()
+_DLC_DIR_ENV = os.environ.get("DLC_DIR", "").strip()
 DLC_DIR = Path(_DLC_DIR_ENV) if _DLC_DIR_ENV else Path("")
 CONFIG_DIR = Path(os.environ.get("CONFIG_DIR", str(Path.home() / ".local" / "share" / "feedback")))
 

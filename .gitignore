@@ -58,7 +58,6 @@ test-results/
 playwright-report/
 
 /dlc
-/library
 
 .vscode
 Thumbs.db
