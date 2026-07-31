@@ -1,0 +1,53 @@
+name: Bug report
+description: Report something that is broken or behaving unexpectedly.
+title: "[Bug]: "
+labels: ["bug", "needs triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting this. Clear reproduction steps make bugs much faster to fix.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What is happening?
+      placeholder: Describe the problem in one or two sentences.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: What should someone do to see the issue?
+      placeholder: |
+        1. Open ...
+        2. Click ...
+        3. See ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What happened instead?
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Browser, OS, plugin/app version, or other useful context.
+      placeholder: Chrome on Windows, commit SHA, app version, etc.
+  - type: textarea
+    id: notes
+    attributes:
+      label: Additional notes
+      description: Screenshots, logs, links, or guesses about cause.
