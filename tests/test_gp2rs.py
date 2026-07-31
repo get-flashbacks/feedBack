@@ -1256,6 +1256,65 @@ def test_single_note_open_finger_omits_fg():
     assert "fg" not in note_to_wire(_parse_note(xn))
 
 
+def test_chord_beat_stroke_field_imports_as_pkd():
+    """Real GP5 chord-strum data lives on `beat.effect.stroke.direction` (a
+    BeatStroke(direction, value) — the "brush" GP's own UI writes when you
+    drag across a chord), NOT `beat.effect.pickStroke` (a separate, rarely-
+    used bare-enum field). Verified against a real chart: every authored
+    chord strum used `.stroke`; none used `.pickStroke`. This is the actual
+    regression — the original fix targeted the wrong field, so real chord
+    strums silently imported as unset despite passing tests built on mocks
+    that used `.pickStroke` directly."""
+    from song import _parse_note, note_to_wire
+    note_e = _ct_note(guitarpro.NoteType.normal, gp_string=1, fret=3)
+    note_b = _ct_note(guitarpro.NoteType.normal, gp_string=2, fret=2)
+    beat = _ct_beat(tick=0, dur_value=4, notes=[note_e, note_b])
+    beat.effect.stroke = SimpleNamespace(
+        direction=guitarpro.BeatStrokeDirection.down, value=64)
+    # pickStroke stays at its SimpleNamespace default (unset) — matching a
+    # real GP5 chord-strum beat, where only .stroke is populated.
+
+    xml_str = convert_track(_ct_song([beat]), track_index=0)
+    root = ET.fromstring(xml_str)  # noqa: S314
+    chord_notes = root.findall(".//chords/chord/chordNote")
+    assert len(chord_notes) == 2
+    for cn in chord_notes:
+        assert cn.get("pickDirection") == "0"
+        assert note_to_wire(_parse_note(cn))["pkd"] == 0
+
+
+def test_stroke_field_preferred_over_pick_stroke_when_both_set():
+    """When a beat somehow carries both fields (unusual, but the two are
+    independently-flagged in the binary format so it's not impossible),
+    `.stroke` wins — it's the field real chord-strum authoring actually
+    uses, per test_chord_beat_stroke_field_imports_as_pkd's real-file check."""
+    note = _ct_note(guitarpro.NoteType.normal, gp_string=2, fret=5)
+    beat = _ct_beat(tick=0, dur_value=4, notes=[note])
+    beat.effect.stroke = SimpleNamespace(
+        direction=guitarpro.BeatStrokeDirection.down, value=64)
+    beat.effect.pickStroke = guitarpro.BeatStrokeDirection.up
+
+    root = ET.fromstring(convert_track(_ct_song([beat]), track_index=0))  # noqa: S314
+    xn = root.findall(".//notes/note")[0]
+    assert xn.get("pickDirection") == "0"  # stroke (down), not pickStroke (up)
+
+
+def test_stroke_field_none_direction_falls_back_to_pick_stroke():
+    """A .stroke object can be present but carry BeatStrokeDirection.none
+    (unset) — attrs' default_factory always creates one, per real
+    BeatEffect() inspection. That must fall through to .pickStroke, not be
+    mistaken for an authored 'no stroke' override."""
+    note = _ct_note(guitarpro.NoteType.normal, gp_string=2, fret=5)
+    beat = _ct_beat(tick=0, dur_value=4, notes=[note])
+    beat.effect.stroke = SimpleNamespace(
+        direction=guitarpro.BeatStrokeDirection.none, value=0)
+    beat.effect.pickStroke = guitarpro.BeatStrokeDirection.up
+
+    root = ET.fromstring(convert_track(_ct_song([beat]), track_index=0))  # noqa: S314
+    xn = root.findall(".//notes/note")[0]
+    assert xn.get("pickDirection") == "1"
+
+
 def test_single_note_down_stroke_imports_as_pkd_0():
     """A GP beat's pickStroke=down imports as pickDirection=0 and survives
     convert_track XML -> _parse_note -> note_to_wire as pkd=0 (issue: GP import

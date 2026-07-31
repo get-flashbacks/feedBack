@@ -271,14 +271,33 @@ def _finger_xml_attrs(n: "RsNote") -> dict:
     return {}
 
 
-def _gp_pick_direction(pick_stroke) -> int:
-    """Map pyguitarpro's BeatStrokeDirection (none=0, up=1, down=2) to
-    feedBack's Note.pick_direction convention (-1 unset, 0 down, 1 up —
+def _gp_pick_direction(effect) -> int:
+    """Read a beat's strum/pick direction off a pyguitarpro BeatEffect and map
+    it to feedBack's Note.pick_direction convention (-1 unset, 0 down, 1 up —
     see song.py's Note.pick_direction / the editor's _editorCyclePickDirection).
-    The two enums don't share a numbering, so this isn't a passthrough."""
-    if pick_stroke == guitarpro.BeatStrokeDirection.down:
+
+    GP5 binary actually encodes TWO independent fields here, read by
+    different flag bits (guitarpro/gp4.py's readBeatEffects): `effect.stroke`
+    (a BeatStroke(direction, value) — the "brush"/arpeggio chord-strum GP's
+    own UI writes when you drag across a chord, `value` being its speed) and
+    `effect.pickStroke` (a bare BeatStrokeDirection — a separate, rarer
+    marking). Verified against real chart files: every one of a sample GP5's
+    24 authored chord strums used `.stroke.direction`; none used
+    `.pickStroke` at all. So `.stroke` is checked first — it's what "chord
+    strumming" actually means in practice — falling back to `.pickStroke`
+    only when `.stroke` is unset, since it's still a real, distinct field
+    some files may use. Both share the same BeatStrokeDirection enum
+    (none=0, up=1, down=2), so a single mapping covers either source.
+    """
+    if effect is None:
+        return -1
+    stroke = getattr(effect, "stroke", None)
+    direction = getattr(stroke, "direction", None) if stroke is not None else None
+    if direction is None or direction == guitarpro.BeatStrokeDirection.none:
+        direction = getattr(effect, "pickStroke", None)
+    if direction == guitarpro.BeatStrokeDirection.down:
         return 0
-    if pick_stroke == guitarpro.BeatStrokeDirection.up:
+    if direction == guitarpro.BeatStrokeDirection.up:
         return 1
     return -1
 
@@ -824,8 +843,7 @@ def convert_track(
                 # A stroke is one pick gesture across the whole beat (all
                 # strings struck together share a direction), so read it
                 # once per beat rather than per note.
-                _beat_pick_dir = _gp_pick_direction(
-                    getattr(beat.effect, "pickStroke", None) if beat.effect else None)
+                _beat_pick_dir = _gp_pick_direction(beat.effect)
 
                 beat_notes = []
                 for note in beat.notes:
