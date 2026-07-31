@@ -651,23 +651,33 @@ def _gpif_left_fingering(note_el) -> int:
 
 
 def _gpif_pick_direction(beat_el) -> int:
-    """Read a GPIF <Beat>'s stroke direction (<Beat><Stroke><Direction>Up|Down
-    </Direction></Stroke></Beat>) -> RS pick_direction int (-1 unset, 0 down,
-    1 up — mirrors gp2rs.py's _gp_pick_direction / song.py's Note.pick_direction).
+    """Read a GPIF <Beat>'s chord-strum direction -> RS pick_direction int
+    (-1 unset, 0 down, 1 up — mirrors gp2rs.py's _gp_pick_direction /
+    song.py's Note.pick_direction).
 
-    NOTE: unlike _gpif_left_fingering (verified against real GP8 exports),
-    this <Stroke>/<Direction> shape is based on the general GPIF schema
-    convention, not a confirmed real export — if a real file's tag differs,
-    this fails safe (returns -1, same as absent) rather than raising, so
-    getting the exact tag wrong costs a missed direction, not a crash.
+    Verified against real GP8 exports (unlike the first cut of this helper,
+    which guessed a <Stroke><Direction> child that doesn't exist in any real
+    file). The actual chord-strum marking is
+    <Properties><Property name="Brush"><Direction>Down|Up</Direction>
+    </Property></Properties> — direct GPIF equivalent of GP4/5's
+    beat.effect.stroke, the "brush" GP's own UI writes when you drag across
+    a chord (see gp2rs.py's _gp_pick_direction for the GP4/5-side finding).
+    <Arpeggio>Down|Up</Arpeggio> (a direct <Beat> child, not a Property) is a
+    related-but-distinct articulation — a broken chord rather than a single
+    brush gesture — checked as a fallback only when Brush is absent, since
+    it still carries a real, chord-wide up/down direction.
 
-    Returns -1 (unset) when the <Stroke> element is absent or the direction
-    text is unrecognised — never fabricates a direction, same posture as
-    _gpif_left_fingering above."""
-    stroke_el = beat_el.find('Stroke')
-    if stroke_el is None:
-        return -1
-    raw = (stroke_el.findtext('Direction') or '').strip().lower()
+    Returns -1 (unset) when neither is present or the text is unrecognised —
+    never fabricates a direction, same posture as _gpif_left_fingering."""
+    raw = ''
+    props = beat_el.find('Properties')
+    if props is not None:
+        for p in props.findall('Property'):
+            if p.get('name') == 'Brush':
+                raw = (p.findtext('Direction') or '').strip().lower()
+                break
+    if not raw:
+        raw = (beat_el.findtext('Arpeggio') or '').strip().lower()
     if raw == 'down':
         return 0
     if raw == 'up':
