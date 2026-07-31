@@ -374,3 +374,32 @@ def test_wallet_balance_clamps_after_source_reset(client, server):
     server.meta_db.reset_source_xp("minigames")                    # lifetime → 0
     wallet = client.get("/api/shop").json()["wallet"]
     assert wallet == {"balance": 0, "lifetime_db": 0, "spent": 50}
+
+
+# ── Cross-profile isolation (feedBack#swap-profiles) ─────────────────────────
+
+def test_paths_wallet_and_shop_isolated_across_profiles(client, server):
+    client.post("/api/progression/paths", json={"add": ["guitar"]})
+    server.meta_db.award_xp(500)
+    client.post("/api/shop/buy", json={"item_id": "theme.test"})
+    assert [p["id"] for p in client.get("/api/progression").json()["paths"]] == ["guitar"]
+    assert client.get("/api/shop").json()["wallet"]["spent"] == 100
+
+    bob = client.post("/api/profiles", json={"display_name": "Bob"}).json()["created"]
+    client.post(f"/api/profiles/{bob['id']}/activate")
+
+    # A fresh profile has no paths, no dB, nothing owned.
+    assert client.get("/api/progression").json()["paths"] == []
+    assert client.get("/api/shop").json()["wallet"] == {"balance": 0, "lifetime_db": 0, "spent": 0}
+    assert all(not i["owned"] for i in client.get("/api/shop").json()["items"])
+
+    # Bob buys the OTHER item independently — must not collide with profile 1's purchase.
+    server.meta_db.award_xp(200)
+    r = client.post("/api/shop/buy", json={"item_id": "frame.test"})
+    assert r.status_code == 200
+
+    client.post("/api/profiles/1/activate")
+    items = {i["id"]: i for i in client.get("/api/shop").json()["items"]}
+    assert items["theme.test"]["owned"] is True
+    assert items["frame.test"]["owned"] is False   # that was Bob's purchase, not this profile's
+    assert client.get("/api/shop").json()["wallet"]["spent"] == 100

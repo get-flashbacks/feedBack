@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Multiple player profiles ("who's playing" switching).** Player identity,
+  XP/level/streak, per-song practice stats, favorites, career progression
+  (paths/challenges/quests/wallet/shop), and achievements/Feats are now scoped
+  per-profile instead of one implicit device-wide profile. New endpoints:
+  `GET /api/profiles` (list), `POST /api/profiles` (create), `POST
+  /api/profiles/{id}/activate` (switch the active profile), `DELETE
+  /api/profiles/{id}` (delete a profile and everything scoped to it — refuses
+  to delete the active or the only remaining profile). Existing endpoints
+  (`/api/profile`, `/api/stats`, `/api/progression`, …) are unchanged in shape
+  — they now implicitly operate on whichever profile is active. A "Switch
+  profile" button on the Profile screen opens a picker to switch or add
+  profiles; switching does a full page reload so every open piece of UI
+  (player, highway WebSocket, plugin state) picks up the new profile cleanly —
+  there's no session/auth system to scope a switch to, so the active profile
+  is a device-local pointer, not per-request. Upgrading installs migrate their
+  existing single profile's data to profile 1 automatically, with zero
+  behavior change until a second profile is added. Known v1 scope boundary:
+  playlists/collections and saved practice loops remain device-wide (not yet
+  per-profile) — a documented follow-up, not an oversight.
 - **Session-sync relay WebSocket — `/ws/sync/{session_id}` (#1030).** A
   deliberately dumb JSON fan-out room: a text frame received from one client is
   forwarded verbatim to every other client on the same session id; the server
