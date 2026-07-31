@@ -561,7 +561,13 @@ class MetadataDB:
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_songs_genre ON songs(genre COLLATE NOCASE)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_songs_tuning_sort_key ON songs(tuning_sort_key)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_songs_year ON songs(year)")
-        self.conn.execute("CREATE TABLE IF NOT EXISTS favorites (filename TEXT PRIMARY KEY)")
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS favorites (
+                profile_id INTEGER NOT NULL DEFAULT 1,
+                filename TEXT NOT NULL,
+                PRIMARY KEY (profile_id, filename)
+            )
+        """)
         # Personal, per-song metadata that must NEVER travel in the shared
         # feedpak file: a light 1–5 user-difficulty (planning only — distinct
         # from the authored 1–10 difficulty bands) + freeform notes. Likes are
@@ -684,24 +690,35 @@ class MetadataDB:
                 created_at TEXT DEFAULT (datetime('now'))
             )
         """)
-        # fee[dB]ack v0.3.0 — single-user player profile (id=1), streak, and the
-        # unified XP store. Peers of favorites/loops; additive + idempotent.
+        # fee[dB]ack — player profiles (feedBack#swap-profiles): a real,
+        # multi-row identity table (was a CHECK(id=1) singleton pre-swap).
         # `player_hash` is a future-leaderboard identity label (SHA-256 of the
         # first display name + a once-generated salt), never an auth credential.
         self.conn.execute("""
-            CREATE TABLE IF NOT EXISTS profile (
-                id INTEGER PRIMARY KEY CHECK (id = 1),
+            CREATE TABLE IF NOT EXISTS profiles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
                 display_name TEXT,
                 avatar_path TEXT,
                 player_hash TEXT,
                 player_salt TEXT,
                 onboarded INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT
+                created_at TEXT,
+                last_active_at TEXT
+            )
+        """)
+        # Which profile is "logged in" right now. A device-local pointer, not a
+        # session/cookie — feedBack has no auth model; switching profiles is a
+        # full-page reload so every request after a switch sees the new active
+        # profile. Singleton by construction (one device, one active profile).
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS active_profile (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                profile_id INTEGER NOT NULL DEFAULT 1
             )
         """)
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS profile_progress (
-                id INTEGER PRIMARY KEY CHECK (id = 1),
+                profile_id INTEGER PRIMARY KEY,
                 current_streak INTEGER NOT NULL DEFAULT 0,
                 best_streak INTEGER NOT NULL DEFAULT 0,
                 last_active_date TEXT          -- YYYY-MM-DD (local)
@@ -712,7 +729,7 @@ class MetadataDB:
         # second XP curve (lib/xp.py owns the math).
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS xp_profile (
-                id INTEGER PRIMARY KEY CHECK (id = 1),
+                profile_id INTEGER PRIMARY KEY,
                 xp INTEGER NOT NULL DEFAULT 0,
                 total_awards INTEGER NOT NULL DEFAULT 0,
                 minigames_seeded INTEGER NOT NULL DEFAULT 0,
@@ -725,16 +742,20 @@ class MetadataDB:
         # profile-reset must subtract only its share, not song-play XP).
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS xp_sources (
-                source TEXT PRIMARY KEY,
-                xp INTEGER NOT NULL DEFAULT 0
+                profile_id INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                xp INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (profile_id, source)
             )
         """)
+        self._migrate_singleton_to_profiles()
         # Per-song/arrangement practice stats (best score + accuracy, plays,
         # last position for Continue-Playing). Fed by the highway note-detection
         # scorer via POST /api/stats. Additive + idempotent; a 0.2.9 build
         # tolerates it and the new build opens an old db without it.
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS song_stats (
+                profile_id INTEGER NOT NULL DEFAULT 1,
                 filename TEXT NOT NULL,
                 arrangement INTEGER NOT NULL DEFAULT 0,
                 plays INTEGER NOT NULL DEFAULT 0,
@@ -745,7 +766,7 @@ class MetadataDB:
                 last_position REAL NOT NULL DEFAULT 0,
                 last_played_at TEXT,
                 updated_at TEXT,
-                PRIMARY KEY (filename, arrangement)
+                PRIMARY KEY (profile_id, filename, arrangement)
             )
         """)
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_song_stats_recent ON song_stats(last_played_at DESC)")
@@ -918,7 +939,7 @@ class MetadataDB:
         # edits update live displays without migrations. Additive + idempotent.
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS progression_state (
-                id INTEGER PRIMARY KEY CHECK (id = 1),
+                profile_id INTEGER PRIMARY KEY,
                 calibration_status TEXT NOT NULL DEFAULT 'pending',  -- pending|completed|skipped
                 calibration_completed_at TEXT,
                 created_at TEXT
@@ -926,23 +947,28 @@ class MetadataDB:
         """)
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS player_paths (
-                path_id TEXT PRIMARY KEY,          -- 'guitar' | 'bass' | 'drums' | future
+                profile_id INTEGER NOT NULL DEFAULT 1,
+                path_id TEXT NOT NULL,             -- 'guitar' | 'bass' | 'drums' | future
                 level INTEGER NOT NULL DEFAULT 0,
-                selected_at TEXT
+                selected_at TEXT,
+                PRIMARY KEY (profile_id, path_id)
             )
         """)
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS challenge_progress (
-                challenge_id TEXT PRIMARY KEY,     -- namespaced 'guitar.l1.clean-run'
+                profile_id INTEGER NOT NULL DEFAULT 1,
+                challenge_id TEXT NOT NULL,        -- namespaced 'guitar.l1.clean-run'
                 path_id TEXT NOT NULL,
                 level INTEGER NOT NULL,            -- the level whose set this belongs to
                 count INTEGER NOT NULL DEFAULT 0,
                 progress_detail TEXT,              -- JSON, e.g. {"seen": [...]} for distinct goals
-                completed_at TEXT
+                completed_at TEXT,
+                PRIMARY KEY (profile_id, challenge_id)
             )
         """)
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS quest_state (
+                profile_id INTEGER NOT NULL DEFAULT 1,
                 period_type TEXT NOT NULL,         -- 'daily' | 'weekly'
                 period_key TEXT NOT NULL,          -- '2026-06-12' | '2026-W24'
                 quest_id TEXT NOT NULL,
@@ -950,7 +976,7 @@ class MetadataDB:
                 reward_db INTEGER NOT NULL DEFAULT 0,  -- snapshot at instantiation
                 progress_detail TEXT,
                 completed_at TEXT,
-                PRIMARY KEY (period_type, period_key, quest_id)
+                PRIMARY KEY (profile_id, period_type, period_key, quest_id)
             )
         """)
         # Spend is tracked separately from xp_profile.xp on purpose: the xp
@@ -958,29 +984,37 @@ class MetadataDB:
         # xp_sources reset semantics) and balance = MAX(0, xp - spent).
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS wallet (
-                id INTEGER PRIMARY KEY CHECK (id = 1),
+                profile_id INTEGER PRIMARY KEY,
                 spent INTEGER NOT NULL DEFAULT 0
             )
         """)
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS shop_owned (
-                item_id TEXT PRIMARY KEY,
+                profile_id INTEGER NOT NULL DEFAULT 1,
+                item_id TEXT NOT NULL,
                 cost_paid INTEGER NOT NULL DEFAULT 0,
-                acquired_at TEXT
+                acquired_at TEXT,
+                PRIMARY KEY (profile_id, item_id)
             )
         """)
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS shop_equipped (
-                slot TEXT PRIMARY KEY,             -- 'theme' | 'avatar_frame'
-                item_id TEXT
+                profile_id INTEGER NOT NULL DEFAULT 1,
+                slot TEXT NOT NULL,                -- 'theme' | 'avatar_frame'
+                item_id TEXT,
+                PRIMARY KEY (profile_id, slot)
             )
         """)
-        # Ensure the singleton rows exist so reads never special-case "no row".
-        self.conn.execute("INSERT OR IGNORE INTO profile (id, onboarded, created_at) VALUES (1, 0, datetime('now'))")
-        self.conn.execute("INSERT OR IGNORE INTO profile_progress (id) VALUES (1)")
-        self.conn.execute("INSERT OR IGNORE INTO xp_profile (id, xp, total_awards, updated_at) VALUES (1, 0, 0, datetime('now'))")
-        self.conn.execute("INSERT OR IGNORE INTO progression_state (id, created_at) VALUES (1, datetime('now'))")
-        self.conn.execute("INSERT OR IGNORE INTO wallet (id) VALUES (1)")
+        self._migrate_composite_profile_id_tables()
+        # Ensure the singleton rows for profile 1 exist so reads never
+        # special-case "no row" (every install has at least profile 1).
+        self.conn.execute(
+            "INSERT OR IGNORE INTO profiles (id, onboarded, created_at) VALUES (1, 0, datetime('now'))")
+        self.conn.execute("INSERT OR IGNORE INTO active_profile (id, profile_id) VALUES (1, 1)")
+        self.conn.execute("INSERT OR IGNORE INTO profile_progress (profile_id) VALUES (1)")
+        self.conn.execute("INSERT OR IGNORE INTO xp_profile (profile_id) VALUES (1)")
+        self.conn.execute("INSERT OR IGNORE INTO progression_state (profile_id) VALUES (1)")
+        self.conn.execute("INSERT OR IGNORE INTO wallet (profile_id) VALUES (1)")
         self.conn.commit()
         self._lock = threading.Lock()
         # work_display (P5a) is a derived cache; True forces a (re)build on the
@@ -989,6 +1023,191 @@ class MetadataDB:
         # One-time repair of pre-fix rows written under URL-encoded filenames
         # (idempotent: a no-op once every row is canonical).
         self._migrate_decode_stat_filenames()
+
+    # ── Multi-profile schema migration (feedBack#swap-profiles) ─────────────
+    # Pre-multi-profile installs stored player identity/progress/XP/career/
+    # shop state as either a `CHECK(id=1)` singleton row or a table keyed only
+    # by content id (item/challenge/quest/path id, or filename) — there was no
+    # column to scope by player. SQLite can't ALTER a CHECK constraint away or
+    # widen an existing PRIMARY KEY, so each affected table is rebuilt: rename
+    # the old table, create the new shape, copy every existing row over
+    # (backfilling profile_id=1 — today's one-and-only profile), drop the old
+    # table. Every step below is idempotent (guarded on the target column
+    # already existing), matching this module's existing migration style.
+    def _table_exists(self, name: str) -> bool:
+        return self.conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
+        ).fetchone() is not None
+
+    def _has_column(self, table: str, column: str) -> bool:
+        return any(r[1] == column for r in self.conn.execute(f"PRAGMA table_info({table})"))
+
+    def _rename_singleton_id_to_profile_id(self, table: str):
+        """`table` still has the pre-migration `id INTEGER PRIMARY KEY
+        CHECK (id = 1)` shape — repurpose that column as `profile_id` (the
+        existing row, id=1, becomes profile 1's row; no data changes)."""
+        if not self._table_exists(table) or self._has_column(table, "profile_id"):
+            return
+        info = self.conn.execute(f"PRAGMA table_info({table})").fetchall()
+        col_defs, col_names = [], []
+        for _, name, coltype, notnull, dflt, _pk in info:
+            if name == "id":
+                continue
+            col_names.append(name)
+            d = f"{name} {coltype or 'TEXT'}"
+            if notnull:
+                d += " NOT NULL"
+            if dflt is not None:
+                d += f" DEFAULT {dflt}"
+            col_defs.append(d)
+        col_list = ", ".join(col_names)
+        extra = (", " + ", ".join(col_defs)) if col_defs else ""
+        self.conn.execute(f"ALTER TABLE {table} RENAME TO {table}__pid_migrate")
+        self.conn.execute(f"CREATE TABLE {table} (profile_id INTEGER PRIMARY KEY{extra})")
+        sel = f"id{', ' + col_list if col_list else ''}"
+        dst = f"profile_id{', ' + col_list if col_list else ''}"
+        self.conn.execute(f"INSERT INTO {table} ({dst}) SELECT {sel} FROM {table}__pid_migrate")
+        self.conn.execute(f"DROP TABLE {table}__pid_migrate")
+
+    def _add_profile_id_to_pk(self, table: str, extra_pk_cols: list[str]):
+        """`table` predates multi-profile support and is keyed only by
+        `extra_pk_cols` (content identity — item/challenge/quest/path id, or
+        filename, or the xp_sources `source`). Fold `profile_id` into the
+        primary key, backfilling every row to profile_id=1. Reads the live
+        column list via PRAGMA (not hardcoded) so this can't drift from the
+        CREATE TABLE statement above."""
+        if not self._table_exists(table) or self._has_column(table, "profile_id"):
+            return
+        info = self.conn.execute(f"PRAGMA table_info({table})").fetchall()
+        col_defs, col_names = [], []
+        for _, name, coltype, notnull, dflt, _pk in info:
+            col_names.append(name)
+            d = f"{name} {coltype or 'TEXT'}"
+            if notnull:
+                d += " NOT NULL"
+            if dflt is not None:
+                d += f" DEFAULT {dflt}"
+            col_defs.append(d)
+        col_list = ", ".join(col_names)
+        pk_list = ", ".join(["profile_id"] + extra_pk_cols)
+        self.conn.execute(f"ALTER TABLE {table} RENAME TO {table}__pid_migrate")
+        self.conn.execute(
+            f"CREATE TABLE {table} (profile_id INTEGER NOT NULL DEFAULT 1, "
+            f"{', '.join(col_defs)}, PRIMARY KEY ({pk_list}))"
+        )
+        self.conn.execute(
+            f"INSERT INTO {table} (profile_id, {col_list}) SELECT 1, {col_list} FROM {table}__pid_migrate")
+        self.conn.execute(f"DROP TABLE {table}__pid_migrate")
+
+    def _migrate_singleton_to_profiles(self):
+        """Called right after the profiles/profile_progress/xp_profile/
+        xp_sources CREATE TABLE statements. The `profiles` table above is
+        `CREATE TABLE IF NOT EXISTS`, so on an upgrading install it already
+        exists (freshly created, empty) by the time this runs — the old
+        `profile` (singular) table's existence is the migration trigger, not
+        `profiles`'s absence."""
+        if self._table_exists("profile"):
+            self.conn.execute("""
+                INSERT OR REPLACE INTO profiles (id, display_name, avatar_path, player_hash,
+                                       player_salt, onboarded, created_at, last_active_at)
+                SELECT id, display_name, avatar_path, player_hash, player_salt,
+                       onboarded, created_at, created_at FROM profile
+            """)
+            self.conn.execute("DROP TABLE profile")
+        self._rename_singleton_id_to_profile_id("profile_progress")
+        self._rename_singleton_id_to_profile_id("xp_profile")
+        self._add_profile_id_to_pk("xp_sources", ["source"])
+
+    def _migrate_composite_profile_id_tables(self):
+        """Called right after the progression_state/player_paths/
+        challenge_progress/quest_state/wallet/shop_owned/shop_equipped CREATE
+        TABLE statements (song_stats and favorites were created earlier)."""
+        self._rename_singleton_id_to_profile_id("progression_state")
+        self._rename_singleton_id_to_profile_id("wallet")
+        self._add_profile_id_to_pk("song_stats", ["filename", "arrangement"])
+        self._add_profile_id_to_pk("favorites", ["filename"])
+        self._add_profile_id_to_pk("player_paths", ["path_id"])
+        self._add_profile_id_to_pk("challenge_progress", ["challenge_id"])
+        self._add_profile_id_to_pk("quest_state", ["period_type", "period_key", "quest_id"])
+        self._add_profile_id_to_pk("shop_owned", ["item_id"])
+        self._add_profile_id_to_pk("shop_equipped", ["slot"])
+
+    # ── Active-profile pointer + profile management ─────────────────────────
+    def get_active_profile_id(self) -> int:
+        row = self.conn.execute("SELECT profile_id FROM active_profile WHERE id = 1").fetchone()
+        return int(row[0]) if row else 1
+
+    def list_profiles(self) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT id, display_name, avatar_path, onboarded, created_at, last_active_at "
+            "FROM profiles ORDER BY id"
+        ).fetchall()
+        active = self.get_active_profile_id()
+        return [{
+            "id": r[0],
+            "display_name": r[1],
+            "avatar_url": r[2],
+            "onboarded": bool(r[3]),
+            "created_at": r[4],
+            "last_active_at": r[5],
+            "active": r[0] == active,
+        } for r in rows]
+
+    def create_profile(self, display_name: str, avatar_url: str | None = None) -> dict:
+        """Create a new, unnamed-or-named profile. Does NOT switch to it —
+        call activate_profile() to make it the active one. Seeds the peer
+        singleton rows (progress/xp/progression/wallet) so every read for
+        the new profile hits a real row instead of special-casing "no row"."""
+        with self._lock:
+            cur = self.conn.execute(
+                "INSERT INTO profiles (display_name, avatar_path, onboarded, created_at) "
+                "VALUES (?, ?, 1, datetime('now'))",
+                (display_name, avatar_url),
+            )
+            pid = cur.lastrowid
+            self.conn.execute("INSERT OR IGNORE INTO profile_progress (profile_id) VALUES (?)", (pid,))
+            self.conn.execute("INSERT OR IGNORE INTO xp_profile (profile_id) VALUES (?)", (pid,))
+            self.conn.execute("INSERT OR IGNORE INTO progression_state (profile_id) VALUES (?)", (pid,))
+            self.conn.execute("INSERT OR IGNORE INTO wallet (profile_id) VALUES (?)", (pid,))
+            self.conn.commit()
+        return next(p for p in self.list_profiles() if p["id"] == pid)
+
+    def activate_profile(self, profile_id: int) -> dict:
+        """Switch the device-local active profile. Raises ValueError for an
+        unknown id (the caller — the /activate route — turns that into a
+        404)."""
+        row = self.conn.execute("SELECT id FROM profiles WHERE id = ?", (profile_id,)).fetchone()
+        if not row:
+            raise ValueError(f"no such profile: {profile_id}")
+        with self._lock:
+            self.conn.execute(
+                "INSERT INTO active_profile (id, profile_id) VALUES (1, ?) "
+                "ON CONFLICT(id) DO UPDATE SET profile_id = excluded.profile_id",
+                (profile_id,),
+            )
+            self.conn.execute(
+                "UPDATE profiles SET last_active_at = datetime('now') WHERE id = ?", (profile_id,)
+            )
+            self.conn.commit()
+        return next(p for p in self.list_profiles() if p["id"] == profile_id)
+
+    def delete_profile(self, profile_id: int) -> None:
+        """Delete a profile and everything scoped to it. Refuses to delete
+        the active profile (the caller must switch away first) or the last
+        remaining profile (there must always be at least one)."""
+        if profile_id == self.get_active_profile_id():
+            raise ValueError("cannot delete the active profile — switch to another profile first")
+        count = self.conn.execute("SELECT COUNT(*) FROM profiles").fetchone()[0]
+        if count <= 1:
+            raise ValueError("cannot delete the only remaining profile")
+        with self._lock:
+            for table in ("profiles", "profile_progress", "xp_profile", "xp_sources",
+                          "progression_state", "player_paths", "challenge_progress",
+                          "quest_state", "wallet", "shop_owned", "shop_equipped",
+                          "song_stats", "favorites"):
+                pid_col = "id" if table == "profiles" else "profile_id"
+                self.conn.execute(f"DELETE FROM {table} WHERE {pid_col} = ?", (profile_id,))
+            self.conn.commit()
 
     def _song_exists(self, filename: str) -> bool:
         return self.conn.execute(
@@ -1028,8 +1247,11 @@ class MetadataDB:
         Library-aware via the shared _canonical_song_filename rule: only decode a
         row when the decoded form is a real song, so a correctly-stored name
         containing literal %XX is never rewritten, and dead-song/orphan rows
-        (neither form in the library) are left exactly as-is."""
-        cols = self._STATS_COLS
+        (neither form in the library) are left exactly as-is.
+
+        Profile-aware (feedBack#swap-profiles): merges are scoped per
+        profile_id — a profile's rows never merge into another profile's."""
+        cols = ("profile_id",) + self._STATS_COLS
         with self._lock:
             rows = [dict(zip(cols, r)) for r in self.conn.execute(
                 "SELECT " + ", ".join(cols) + " FROM song_stats").fetchall()]
@@ -1038,17 +1260,17 @@ class MetadataDB:
                 return  # every row already canonical (or an untouchable orphan)
             merged: dict = {}
             for r in rows:
-                key = (canon(r["filename"]), int(r["arrangement"]))
+                key = (r["profile_id"], canon(r["filename"]), int(r["arrangement"]))
                 cur = merged.get(key)
                 if cur is None:
-                    merged[key] = dict(r, filename=key[0], arrangement=key[1])
+                    merged[key] = dict(r, filename=key[1], arrangement=key[2])
                     continue
                 # Most-recently-updated row wins the "last_*"/position fields.
                 def _stamp(x):
                     return str(x.get("updated_at") or x.get("last_played_at") or "")
                 newer = r if _stamp(r) >= _stamp(cur) else cur
                 merged[key] = {
-                    "filename": key[0], "arrangement": key[1],
+                    "profile_id": key[0], "filename": key[1], "arrangement": key[2],
                     "plays": (cur["plays"] or 0) + (r["plays"] or 0),
                     "best_score": max(cur["best_score"] or 0, r["best_score"] or 0),
                     "best_accuracy": max(cur["best_accuracy"] or 0.0, r["best_accuracy"] or 0.0),
@@ -1073,17 +1295,23 @@ class MetadataDB:
                 raise
 
     def is_favorite(self, filename: str) -> bool:
-        return self.conn.execute("SELECT 1 FROM favorites WHERE filename = ?", (filename,)).fetchone() is not None
+        return self.conn.execute(
+            "SELECT 1 FROM favorites WHERE profile_id = ? AND filename = ?",
+            (self.get_active_profile_id(), filename),
+        ).fetchone() is not None
 
     def toggle_favorite(self, filename: str) -> bool:
-        """Toggle favorite status. Returns new state."""
+        """Toggle favorite status for the active profile. Returns new state."""
+        pid = self.get_active_profile_id()
         with self._lock:
             if self.is_favorite(filename):
-                self.conn.execute("DELETE FROM favorites WHERE filename = ?", (filename,))
+                self.conn.execute(
+                    "DELETE FROM favorites WHERE profile_id = ? AND filename = ?", (pid, filename))
                 self.conn.commit()
                 return False
             else:
-                self.conn.execute("INSERT OR IGNORE INTO favorites VALUES (?)", (filename,))
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO favorites (profile_id, filename) VALUES (?, ?)", (pid, filename))
                 self.conn.commit()
                 return True
 
@@ -1417,8 +1645,9 @@ class MetadataDB:
 
     # ── Player profile (fee[dB]ack v0.3.0) ─────────────────────────────────
     def get_profile(self) -> dict:
+        pid = self.get_active_profile_id()
         row = self.conn.execute(
-            "SELECT display_name, avatar_path, player_hash, onboarded FROM profile WHERE id = 1"
+            "SELECT display_name, avatar_path, player_hash, onboarded FROM profiles WHERE id = ?", (pid,)
         ).fetchone()
         if not row:
             return {"display_name": None, "avatar_url": None, "player_hash": None, "onboarded": False}
@@ -1430,12 +1659,13 @@ class MetadataDB:
         }
 
     def set_profile(self, display_name: str, avatar_url: str | None) -> dict:
-        """Set/update the display name (+ avatar). Computes player_hash ONCE
-        from the first name + a stored random salt; it stays stable across
-        later name changes. Marks onboarded=1."""
+        """Set/update the ACTIVE profile's display name (+ avatar). Computes
+        player_hash ONCE from the first name + a stored random salt; it stays
+        stable across later name changes. Marks onboarded=1."""
+        pid = self.get_active_profile_id()
         with self._lock:
             cur = self.conn.execute(
-                "SELECT player_hash, player_salt FROM profile WHERE id = 1"
+                "SELECT player_hash, player_salt FROM profiles WHERE id = ?", (pid,)
             ).fetchone()
             player_hash = cur[0] if cur else None
             salt = cur[1] if cur else None
@@ -1443,24 +1673,27 @@ class MetadataDB:
                 salt = secrets.token_hex(16)
                 player_hash = hashlib.sha256((display_name + salt).encode("utf-8")).hexdigest()
             self.conn.execute(
-                "UPDATE profile SET display_name = ?, "
+                "UPDATE profiles SET display_name = ?, "
                 "avatar_path = COALESCE(?, avatar_path), "
-                "player_hash = ?, player_salt = ?, onboarded = 1 WHERE id = 1",
-                (display_name, avatar_url, player_hash, salt),
+                "player_hash = ?, player_salt = ?, onboarded = 1 WHERE id = ?",
+                (display_name, avatar_url, player_hash, salt, pid),
             )
             self.conn.commit()
         return self.get_profile()
 
     # ── Unified XP store ────────────────────────────────────────────────────
     def get_xp(self) -> int:
-        row = self.conn.execute("SELECT xp FROM xp_profile WHERE id = 1").fetchone()
+        row = self.conn.execute(
+            "SELECT xp FROM xp_profile WHERE profile_id = ?", (self.get_active_profile_id(),)
+        ).fetchone()
         return int(row[0]) if row else 0
 
     def award_xp(self, amount: int, source: str | None = None) -> int:
-        """Add XP to the unified store; returns the new total. `amount` may be
-        NEGATIVE — used internally to REVERSE a failed award (the total and the
-        per-source bucket both clamp at 0). `source` (when given) is tracked in
-        the xp_sources ledger so it can be reset independently.
+        """Add XP to the ACTIVE profile's unified store; returns the new
+        total. `amount` may be NEGATIVE — used internally to REVERSE a failed
+        award (the total and the per-source bucket both clamp at 0). `source`
+        (when given) is tracked in the xp_sources ledger so it can be reset
+        independently.
 
         Service boundary: the plugin hook (context["award_xp"]) passes this
         straight through, so coerce defensively — bad input (bool, NaN/Inf,
@@ -1471,44 +1704,51 @@ class MetadataDB:
         except (TypeError, ValueError, OverflowError):
             amount = 0
         amount = max(-10_000_000, min(amount, 10_000_000))
+        pid = self.get_active_profile_id()
         with self._lock:
             # MAX(0, …) clamps the result so a reversal can't drive XP negative.
             self.conn.execute(
                 "UPDATE xp_profile SET xp = MAX(0, xp + ?), "
-                "total_awards = total_awards + ?, updated_at = datetime('now') WHERE id = 1",
-                (amount, 1 if amount > 0 else 0),
+                "total_awards = total_awards + ?, updated_at = datetime('now') WHERE profile_id = ?",
+                (amount, 1 if amount > 0 else 0, pid),
             )
             if source:
                 self.conn.execute(
-                    "INSERT INTO xp_sources (source, xp) VALUES (?, MAX(0, ?)) "
-                    "ON CONFLICT(source) DO UPDATE SET xp = MAX(0, xp + ?)",
-                    (source, amount, amount),
+                    "INSERT INTO xp_sources (profile_id, source, xp) VALUES (?, ?, MAX(0, ?)) "
+                    "ON CONFLICT(profile_id, source) DO UPDATE SET xp = MAX(0, xp + ?)",
+                    (pid, source, amount, amount),
                 )
             self.conn.commit()
-            row = self.conn.execute("SELECT xp FROM xp_profile WHERE id = 1").fetchone()
+            row = self.conn.execute("SELECT xp FROM xp_profile WHERE profile_id = ?", (pid,)).fetchone()
         return int(row[0]) if row else 0
 
     def reset_source_xp(self, source: str) -> dict:
-        """Subtract a single source's tracked contribution from the unified
-        total and zero its bucket (e.g. a minigames profile-reset removes only
-        minigames XP, leaving song-play/tutorials XP intact). Returns progress."""
+        """Subtract a single source's tracked contribution from the ACTIVE
+        profile's unified total and zero its bucket (e.g. a minigames
+        profile-reset removes only minigames XP, leaving song-play/tutorials
+        XP intact). Returns progress."""
+        pid = self.get_active_profile_id()
         with self._lock:
-            row = self.conn.execute("SELECT xp FROM xp_sources WHERE source = ?", (source,)).fetchone()
+            row = self.conn.execute(
+                "SELECT xp FROM xp_sources WHERE profile_id = ? AND source = ?", (pid, source)
+            ).fetchone()
             amt = int(row[0]) if row and row[0] else 0
             if amt:
                 self.conn.execute(
-                    "UPDATE xp_profile SET xp = MAX(0, xp - ?), updated_at = datetime('now') WHERE id = 1",
-                    (amt,),
+                    "UPDATE xp_profile SET xp = MAX(0, xp - ?), updated_at = datetime('now') WHERE profile_id = ?",
+                    (amt, pid),
                 )
-            self.conn.execute("UPDATE xp_sources SET xp = 0 WHERE source = ?", (source,))
+            self.conn.execute(
+                "UPDATE xp_sources SET xp = 0 WHERE profile_id = ? AND source = ?", (pid, source)
+            )
             self.conn.commit()
         return self.get_progress()
 
     def seed_xp_once(self, amount: int, marker: str = "minigames") -> bool:
-        """One-time seed of the unified store from a pre-unification source
-        (e.g. the minigames plugin's profile.json), so existing earned XP is
-        preserved. No-ops if already seeded or the store already has XP.
-        Returns True if it seeded."""
+        """One-time seed of the ACTIVE profile's unified store from a
+        pre-unification source (e.g. the minigames plugin's profile.json), so
+        existing earned XP is preserved. No-ops if already seeded or the store
+        already has XP. Returns True if it seeded."""
         # Same no-raise / no-silent-mutate contract as award_xp(): this is a
         # plugin-facing service (context["seed_xp"]). _as_int rejects bool /
         # non-integral; bad input becomes a 0 (no-op) seed rather than raising.
@@ -1519,39 +1759,44 @@ class MetadataDB:
         amount = max(0, min(amount, 10_000_000))
         if marker != "minigames":
             return False
+        pid = self.get_active_profile_id()
         with self._lock:
             row = self.conn.execute(
-                "SELECT xp, minigames_seeded FROM xp_profile WHERE id = 1"
+                "SELECT xp, minigames_seeded FROM xp_profile WHERE profile_id = ?", (pid,)
             ).fetchone()
             xp_now, seeded = (row[0], row[1]) if row else (0, 0)
             if seeded or xp_now > 0 or amount <= 0:
                 if not seeded:
-                    self.conn.execute("UPDATE xp_profile SET minigames_seeded = 1 WHERE id = 1")
+                    self.conn.execute(
+                        "UPDATE xp_profile SET minigames_seeded = 1 WHERE profile_id = ?", (pid,))
                     self.conn.commit()
                 return False
             self.conn.execute(
-                "UPDATE xp_profile SET xp = ?, minigames_seeded = 1, updated_at = datetime('now') WHERE id = 1",
-                (amount,),
+                "UPDATE xp_profile SET xp = ?, minigames_seeded = 1, updated_at = datetime('now') "
+                "WHERE profile_id = ?",
+                (amount, pid),
             )
             # Record the seeded amount in the source ledger too, so a later
             # minigames reset subtracts the migrated XP rather than orphaning it.
             self.conn.execute(
-                "INSERT INTO xp_sources (source, xp) VALUES (?, ?) "
-                "ON CONFLICT(source) DO UPDATE SET xp = xp + ?",
-                (marker, amount, amount),
+                "INSERT INTO xp_sources (profile_id, source, xp) VALUES (?, ?, ?) "
+                "ON CONFLICT(profile_id, source) DO UPDATE SET xp = xp + ?",
+                (pid, marker, amount, amount),
             )
             self.conn.commit()
         return True
 
     # ── Streak ──────────────────────────────────────────────────────────────
     def record_active_day(self, today: str) -> dict:
-        """Mark `today` (YYYY-MM-DD, local) as an active day. Any session on a
-        calendar day keeps the streak: yesterday→+1, today→unchanged, gap or
-        first-ever→reset to 1. Updates best_streak."""
+        """Mark `today` (YYYY-MM-DD, local) as an active day for the ACTIVE
+        profile. Any session on a calendar day keeps the streak: yesterday→+1,
+        today→unchanged, gap or first-ever→reset to 1. Updates best_streak."""
         from datetime import date, timedelta
+        pid = self.get_active_profile_id()
         with self._lock:
             row = self.conn.execute(
-                "SELECT current_streak, best_streak, last_active_date FROM profile_progress WHERE id = 1"
+                "SELECT current_streak, best_streak, last_active_date FROM profile_progress "
+                "WHERE profile_id = ?", (pid,)
             ).fetchone()
             cur, best, last = (row[0], row[1], row[2]) if row else (0, 0, None)
             if last != today:
@@ -1562,18 +1807,23 @@ class MetadataDB:
                 cur = cur + 1 if (last and last == yesterday) else 1
                 best = max(best or 0, cur)
                 self.conn.execute(
-                    "UPDATE profile_progress SET current_streak = ?, best_streak = ?, last_active_date = ? WHERE id = 1",
-                    (cur, best, today),
+                    "INSERT INTO profile_progress (profile_id, current_streak, best_streak, last_active_date) "
+                    "VALUES (?, ?, ?, ?) ON CONFLICT(profile_id) DO UPDATE SET "
+                    "current_streak = excluded.current_streak, best_streak = excluded.best_streak, "
+                    "last_active_date = excluded.last_active_date",
+                    (pid, cur, best, today),
                 )
                 self.conn.commit()
                 last = today
         return {"current_streak": cur, "best_streak": best, "last_active_date": last}
 
     def get_progress(self) -> dict:
-        """The full profile-badge payload: XP/level (lib/xp) + streak."""
+        """The full profile-badge payload for the ACTIVE profile: XP/level
+        (lib/xp) + streak."""
         from xp import progress as _xp_progress
         p = self.conn.execute(
-            "SELECT current_streak, best_streak, last_active_date FROM profile_progress WHERE id = 1"
+            "SELECT current_streak, best_streak, last_active_date FROM profile_progress "
+            "WHERE profile_id = ?", (self.get_active_profile_id(),)
         ).fetchone()
         cur, best, last = (p[0], p[1], p[2]) if p else (0, 0, None)
         out = _xp_progress(self.get_xp())
@@ -1584,10 +1834,12 @@ class MetadataDB:
     # Lock discipline: self._lock is NOT reentrant and award_xp() takes it, so
     # record_progression_event() applies state inside the lock but awards quest
     # dB (and re-enters for quest_completed goals) only after releasing it.
+    # Every method here operates on the ACTIVE profile.
 
     def get_progression_state(self) -> dict:
         row = self.conn.execute(
-            "SELECT calibration_status, calibration_completed_at FROM progression_state WHERE id = 1"
+            "SELECT calibration_status, calibration_completed_at FROM progression_state "
+            "WHERE profile_id = ?", (self.get_active_profile_id(),)
         ).fetchone()
         status = row[0] if row else "pending"
         return {"calibration_status": status, "calibration_completed_at": row[1] if row else None}
@@ -1598,32 +1850,39 @@ class MetadataDB:
         with self._lock:
             self.conn.execute(
                 "UPDATE progression_state SET calibration_status = 'skipped' "
-                "WHERE id = 1 AND calibration_status = 'pending'"
+                "WHERE profile_id = ? AND calibration_status = 'pending'",
+                (self.get_active_profile_id(),),
             )
             self.conn.commit()
         return self.get_progression_state()
 
     def get_player_paths(self) -> dict:
-        """{path_id: level} for every selected path."""
-        rows = self.conn.execute("SELECT path_id, level FROM player_paths").fetchall()
+        """{path_id: level} for every selected path (active profile)."""
+        rows = self.conn.execute(
+            "SELECT path_id, level FROM player_paths WHERE profile_id = ?",
+            (self.get_active_profile_id(),),
+        ).fetchall()
         return {r[0]: int(r[1]) for r in rows}
 
     def add_player_paths(self, path_ids) -> dict:
         """Select paths (idempotent; re-adding never resets a level)."""
+        pid = self.get_active_profile_id()
         with self._lock:
-            for pid in path_ids:
+            for path_id in path_ids:
                 self.conn.execute(
-                    "INSERT OR IGNORE INTO player_paths (path_id, level, selected_at) "
-                    "VALUES (?, 0, datetime('now'))",
-                    (pid,),
+                    "INSERT OR IGNORE INTO player_paths (profile_id, path_id, level, selected_at) "
+                    "VALUES (?, ?, 0, datetime('now'))",
+                    (pid, path_id),
                 )
             self.conn.commit()
         return self.get_player_paths()
 
     def get_challenge_state(self) -> dict:
-        """{challenge_id: {count, completed, detail}} for every touched challenge."""
+        """{challenge_id: {count, completed, detail}} for every touched
+        challenge (active profile)."""
         rows = self.conn.execute(
-            "SELECT challenge_id, count, progress_detail, completed_at FROM challenge_progress"
+            "SELECT challenge_id, count, progress_detail, completed_at FROM challenge_progress "
+            "WHERE profile_id = ?", (self.get_active_profile_id(),)
         ).fetchall()
         out = {}
         for cid, count, detail, completed_at in rows:
@@ -1640,10 +1899,12 @@ class MetadataDB:
         return out
 
     def ensure_quest_period(self, content, now) -> None:
-        """Lazily instantiate the current daily/weekly quest rows (deterministic
-        per period key; rewards snapshot so live quests survive content edits)."""
+        """Lazily instantiate the current daily/weekly quest rows for the
+        active profile (deterministic per period key; rewards snapshot so
+        live quests survive content edits)."""
         import progression as progression_mod
         keys = progression_mod.period_keys(now)
+        pid = self.get_active_profile_id()
         with self._lock:
             for period_type in ("daily", "weekly"):
                 cfg = (content.get("quests") or {}).get(period_type) or {}
@@ -1653,27 +1914,31 @@ class MetadataDB:
                     continue
                 key = keys[period_type]
                 exists = self.conn.execute(
-                    "SELECT 1 FROM quest_state WHERE period_type = ? AND period_key = ? LIMIT 1",
-                    (period_type, key),
+                    "SELECT 1 FROM quest_state WHERE profile_id = ? AND period_type = ? "
+                    "AND period_key = ? LIMIT 1",
+                    (pid, period_type, key),
                 ).fetchone()
                 if exists:
                     continue
                 for qid in progression_mod.select_quests(pool.keys(), period_type, key, count):
                     self.conn.execute(
                         "INSERT OR IGNORE INTO quest_state "
-                        "(period_type, period_key, quest_id, reward_db) VALUES (?, ?, ?, ?)",
-                        (period_type, key, qid, int(pool[qid].get("reward_db") or 0)),
+                        "(profile_id, period_type, period_key, quest_id, reward_db) "
+                        "VALUES (?, ?, ?, ?, ?)",
+                        (pid, period_type, key, qid, int(pool[qid].get("reward_db") or 0)),
                     )
             self.conn.commit()
 
     def get_quest_rows(self, period_keys_map: dict) -> list:
-        """Current-period quest instances as snapshot/API rows."""
+        """Current-period quest instances as snapshot/API rows (active profile)."""
         out = []
+        pid = self.get_active_profile_id()
         for period_type, key in period_keys_map.items():
             rows = self.conn.execute(
                 "SELECT quest_id, count, reward_db, progress_detail, completed_at "
-                "FROM quest_state WHERE period_type = ? AND period_key = ? ORDER BY quest_id",
-                (period_type, key),
+                "FROM quest_state WHERE profile_id = ? AND period_type = ? AND period_key = ? "
+                "ORDER BY quest_id",
+                (pid, period_type, key),
             ).fetchall()
             for qid, count, reward, detail, completed_at in rows:
                 try:
@@ -1693,10 +1958,12 @@ class MetadataDB:
         return out
 
     def get_wallet(self) -> dict:
-        """{balance, lifetime_db, spent} — see the wallet table comment for
-        why spend never mutates xp_profile.xp."""
+        """{balance, lifetime_db, spent} for the active profile — see the
+        wallet table comment for why spend never mutates xp_profile.xp."""
         import progression as progression_mod
-        row = self.conn.execute("SELECT spent FROM wallet WHERE id = 1").fetchone()
+        row = self.conn.execute(
+            "SELECT spent FROM wallet WHERE profile_id = ?", (self.get_active_profile_id(),)
+        ).fetchone()
         spent = int(row[0]) if row and row[0] else 0
         lifetime = self.get_xp()
         return {
@@ -1707,16 +1974,19 @@ class MetadataDB:
 
     def buy_shop_item(self, item: dict) -> tuple:
         """Atomic purchase: balance check + spend + ownership in one
-        transaction. Returns ("ok"|"owned"|"insufficient", wallet)."""
+        transaction (active profile). Returns ("ok"|"owned"|"insufficient", wallet)."""
+        pid = self.get_active_profile_id()
         with self._lock:
             owned = self.conn.execute(
-                "SELECT 1 FROM shop_owned WHERE item_id = ?", (item["id"],)
+                "SELECT 1 FROM shop_owned WHERE profile_id = ? AND item_id = ?", (pid, item["id"])
             ).fetchone()
             if owned:
                 status = "owned"
             else:
-                xp_row = self.conn.execute("SELECT xp FROM xp_profile WHERE id = 1").fetchone()
-                spent_row = self.conn.execute("SELECT spent FROM wallet WHERE id = 1").fetchone()
+                xp_row = self.conn.execute(
+                    "SELECT xp FROM xp_profile WHERE profile_id = ?", (pid,)).fetchone()
+                spent_row = self.conn.execute(
+                    "SELECT spent FROM wallet WHERE profile_id = ?", (pid,)).fetchone()
                 balance = max(0, int(xp_row[0] if xp_row else 0) - int(spent_row[0] if spent_row else 0))
                 cost = int(item.get("cost") or 0)
                 if cost < 0:
@@ -1725,12 +1995,12 @@ class MetadataDB:
                     status = "insufficient"
                 else:
                     self.conn.execute(
-                        "UPDATE wallet SET spent = spent + ? WHERE id = 1", (cost,)
+                        "UPDATE wallet SET spent = spent + ? WHERE profile_id = ?", (cost, pid)
                     )
                     self.conn.execute(
-                        "INSERT INTO shop_owned (item_id, cost_paid, acquired_at) "
-                        "VALUES (?, ?, datetime('now'))",
-                        (item["id"], cost),
+                        "INSERT INTO shop_owned (profile_id, item_id, cost_paid, acquired_at) "
+                        "VALUES (?, ?, ?, datetime('now'))",
+                        (pid, item["id"], cost),
                     )
                     self.conn.commit()
                     status = "ok"
@@ -1738,34 +2008,42 @@ class MetadataDB:
 
     def get_owned_items(self) -> dict:
         rows = self.conn.execute(
-            "SELECT item_id, cost_paid, acquired_at FROM shop_owned"
+            "SELECT item_id, cost_paid, acquired_at FROM shop_owned WHERE profile_id = ?",
+            (self.get_active_profile_id(),),
         ).fetchall()
         return {r[0]: {"cost_paid": int(r[1] or 0), "acquired_at": r[2]} for r in rows}
 
     def get_equipped(self) -> dict:
-        rows = self.conn.execute("SELECT slot, item_id FROM shop_equipped").fetchall()
+        rows = self.conn.execute(
+            "SELECT slot, item_id FROM shop_equipped WHERE profile_id = ?",
+            (self.get_active_profile_id(),),
+        ).fetchall()
         return {r[0]: r[1] for r in rows if r[1]}
 
     def equip_item(self, slot: str, item_id) -> dict:
-        """Equip an owned item into a slot (item_id=None unequips)."""
+        """Equip an owned item into a slot for the active profile (item_id=None unequips)."""
+        pid = self.get_active_profile_id()
         with self._lock:
             if item_id is None:
-                self.conn.execute("DELETE FROM shop_equipped WHERE slot = ?", (slot,))
+                self.conn.execute(
+                    "DELETE FROM shop_equipped WHERE profile_id = ? AND slot = ?", (pid, slot))
             else:
                 self.conn.execute(
-                    "INSERT INTO shop_equipped (slot, item_id) VALUES (?, ?) "
-                    "ON CONFLICT(slot) DO UPDATE SET item_id = excluded.item_id",
-                    (slot, item_id),
+                    "INSERT INTO shop_equipped (profile_id, slot, item_id) VALUES (?, ?, ?) "
+                    "ON CONFLICT(profile_id, slot) DO UPDATE SET item_id = excluded.item_id",
+                    (pid, slot, item_id),
                 )
             self.conn.commit()
         return self.get_equipped()
 
     def progression_snapshot(self, content, now) -> dict:
-        """The plain-dict state view lib/progression.evaluate_event reads."""
+        """The plain-dict state view lib/progression.evaluate_event reads
+        (active profile)."""
         import progression as progression_mod
         keys = progression_mod.period_keys(now)
         streak_row = self.conn.execute(
-            "SELECT current_streak FROM profile_progress WHERE id = 1"
+            "SELECT current_streak FROM profile_progress WHERE profile_id = ?",
+            (self.get_active_profile_id(),),
         ).fetchone()
         return {
             "calibration_status": self.get_progression_state()["calibration_status"],
@@ -1780,10 +2058,11 @@ class MetadataDB:
                                  now=None, _depth: int = 0) -> dict:
         """The single progression choke point: evaluate one event, persist the
         deltas, award quest dB, and re-enter once for quest_completed goals.
-        Returns a toast-ready summary."""
+        Returns a toast-ready summary. Operates on the ACTIVE profile."""
         import progression as progression_mod
         from datetime import datetime as _dt
         now = now or _dt.now()
+        pid = self.get_active_profile_id()
         self.ensure_quest_period(content, now)
         snapshot = self.progression_snapshot(content, now)
         outcome = progression_mod.evaluate_event(
@@ -1804,12 +2083,12 @@ class MetadataDB:
                 detail = json.dumps(ch["detail"]) if ch.get("detail") else None
                 self.conn.execute(
                     "INSERT INTO challenge_progress "
-                    "(challenge_id, path_id, level, count, progress_detail, completed_at) "
-                    "VALUES (?, ?, ?, ?, ?, CASE WHEN ? THEN datetime('now') END) "
-                    "ON CONFLICT(challenge_id) DO UPDATE SET "
+                    "(profile_id, challenge_id, path_id, level, count, progress_detail, completed_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, CASE WHEN ? THEN datetime('now') END) "
+                    "ON CONFLICT(profile_id, challenge_id) DO UPDATE SET "
                     "count = excluded.count, progress_detail = excluded.progress_detail, "
                     "completed_at = COALESCE(challenge_progress.completed_at, excluded.completed_at)",
-                    (ch["challenge_id"], ch["path_id"], ch["level"], ch["count"],
+                    (pid, ch["challenge_id"], ch["path_id"], ch["level"], ch["count"],
                      detail, 1 if ch["completed"] else 0),
                 )
                 if ch["completed"]:
@@ -1821,8 +2100,8 @@ class MetadataDB:
             for lu in outcome["level_ups"]:
                 # Guard on the old level so a stale evaluation can't double-bump.
                 self.conn.execute(
-                    "UPDATE player_paths SET level = ? WHERE path_id = ? AND level = ?",
-                    (lu["new_level"], lu["path_id"], lu["new_level"] - 1),
+                    "UPDATE player_paths SET level = ? WHERE profile_id = ? AND path_id = ? AND level = ?",
+                    (lu["new_level"], pid, lu["path_id"], lu["new_level"] - 1),
                 )
             # Only quests whose row actually TRANSITIONED to completed in this
             # call get rewarded/re-entered. The pure outcome was computed from
@@ -1836,9 +2115,10 @@ class MetadataDB:
                 cur = self.conn.execute(
                     "UPDATE quest_state SET count = ?, progress_detail = ?, "
                     "completed_at = COALESCE(completed_at, CASE WHEN ? THEN datetime('now') END) "
-                    "WHERE period_type = ? AND period_key = ? AND quest_id = ? AND completed_at IS NULL",
+                    "WHERE profile_id = ? AND period_type = ? AND period_key = ? AND quest_id = ? "
+                    "AND completed_at IS NULL",
                     (q["count"], detail, 1 if q["completed"] else 0,
-                     q["period_type"], keys.get(q["period_type"], ""), q["quest_id"]),
+                     pid, q["period_type"], keys.get(q["period_type"], ""), q["quest_id"]),
                 )
                 if q["completed"] and cur.rowcount > 0:
                     newly_completed_quests.append(q)
@@ -1846,7 +2126,8 @@ class MetadataDB:
                 self.conn.execute(
                     "UPDATE progression_state SET calibration_status = 'completed', "
                     "calibration_completed_at = datetime('now') "
-                    "WHERE id = 1 AND calibration_status != 'completed'"
+                    "WHERE profile_id = ? AND calibration_status != 'completed'",
+                    (pid,),
                 )
             self.conn.commit()
 
@@ -1887,8 +2168,8 @@ class MetadataDB:
     def _stats_row(self, filename: str, arrangement: int) -> dict | None:
         r = self.conn.execute(
             "SELECT " + ", ".join(self._STATS_COLS) +
-            " FROM song_stats WHERE filename = ? AND arrangement = ?",
-            (filename, int(arrangement)),
+            " FROM song_stats WHERE profile_id = ? AND filename = ? AND arrangement = ?",
+            (self.get_active_profile_id(), filename, int(arrangement)),
         ).fetchone()
         return dict(zip(self._STATS_COLS, r)) if r else None
 
@@ -2252,6 +2533,7 @@ class MetadataDB:
         """Record a scored play: plays += 1, best_* = max, last_* = new.
         `seconds` (wall-clock play time from the recorder) accrues."""
         from song_score import merge_stats
+        pid = self.get_active_profile_id()
         with self._lock:
             existing = self._stats_row(filename, int(arrangement))
             merged = merge_stats(existing, {
@@ -2259,12 +2541,12 @@ class MetadataDB:
             })
             self.conn.execute(
                 """INSERT INTO song_stats
-                       (filename, arrangement, plays, best_score, best_accuracy,
+                       (profile_id, filename, arrangement, plays, best_score, best_accuracy,
                         last_score, last_accuracy, last_position, seconds_total,
                         last_played_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?,
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                            strftime('%Y-%m-%d %H:%M:%f','now'), strftime('%Y-%m-%d %H:%M:%f','now'))
-                   ON CONFLICT(filename, arrangement) DO UPDATE SET
+                   ON CONFLICT(profile_id, filename, arrangement) DO UPDATE SET
                        plays = excluded.plays,
                        best_score = excluded.best_score,
                        best_accuracy = excluded.best_accuracy,
@@ -2274,7 +2556,7 @@ class MetadataDB:
                        seconds_total = song_stats.seconds_total + excluded.seconds_total,
                        last_played_at = excluded.last_played_at,
                        updated_at = excluded.updated_at""",
-                (filename, int(arrangement), merged["plays"], merged["best_score"],
+                (pid, filename, int(arrangement), merged["plays"], merged["best_score"],
                  merged["best_accuracy"], merged["last_score"], merged["last_accuracy"],
                  merged["last_position"], float(seconds or 0)),
             )
@@ -2289,18 +2571,19 @@ class MetadataDB:
         filter/order on it, so a position-only touch must set it or the song
         never surfaces as 'recent' / 'continue playing'. `seconds` accrues
         wall-clock play time (career hours odometer)."""
+        pid = self.get_active_profile_id()
         with self._lock:
             self.conn.execute(
-                """INSERT INTO song_stats (filename, arrangement, last_position,
+                """INSERT INTO song_stats (profile_id, filename, arrangement, last_position,
                                            seconds_total, last_played_at, updated_at)
-                   VALUES (?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%f','now'),
+                   VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%f','now'),
                            strftime('%Y-%m-%d %H:%M:%f','now'))
-                   ON CONFLICT(filename, arrangement) DO UPDATE SET
+                   ON CONFLICT(profile_id, filename, arrangement) DO UPDATE SET
                        last_position = excluded.last_position,
                        seconds_total = song_stats.seconds_total + excluded.seconds_total,
                        last_played_at = excluded.last_played_at,
                        updated_at = excluded.updated_at""",
-                (filename, int(arrangement), float(last_position), float(seconds or 0)),
+                (pid, filename, int(arrangement), float(last_position), float(seconds or 0)),
             )
             self.conn.commit()
         return self._stats_row(filename, int(arrangement))
@@ -2316,27 +2599,29 @@ class MetadataDB:
         retry time — rare (offline corner), self-healing on the next play,
         and preferable to the alternative (keep-existing would leave repeat
         plays looking stale, the common case)."""
+        pid = self.get_active_profile_id()
         with self._lock:
             self.conn.execute(
-                """INSERT INTO song_stats (filename, arrangement, seconds_total,
+                """INSERT INTO song_stats (profile_id, filename, arrangement, seconds_total,
                                            last_played_at, updated_at)
-                   VALUES (?, ?, ?, strftime('%Y-%m-%d %H:%M:%f','now'),
+                   VALUES (?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%f','now'),
                            strftime('%Y-%m-%d %H:%M:%f','now'))
-                   ON CONFLICT(filename, arrangement) DO UPDATE SET
+                   ON CONFLICT(profile_id, filename, arrangement) DO UPDATE SET
                        seconds_total = song_stats.seconds_total + excluded.seconds_total,
                        last_played_at = excluded.last_played_at,
                        updated_at = excluded.updated_at""",
-                (filename, int(arrangement), float(seconds)),
+                (pid, filename, int(arrangement), float(seconds)),
             )
             self.conn.commit()
         return self._stats_row(filename, int(arrangement))
 
     def get_song_stats(self, filename: str) -> dict:
-        """Best/last/plays across all arrangements of a song, plus per-arrangement rows."""
+        """Best/last/plays across all arrangements of a song (active profile),
+        plus per-arrangement rows."""
         rows = self.conn.execute(
             "SELECT " + ", ".join(self._STATS_COLS) +
-            " FROM song_stats WHERE filename = ? ORDER BY arrangement",
-            (filename,),
+            " FROM song_stats WHERE profile_id = ? AND filename = ? ORDER BY arrangement",
+            (self.get_active_profile_id(), filename),
         ).fetchall()
         arr = [dict(zip(self._STATS_COLS, r)) for r in rows]
         best_acc = max((a["best_accuracy"] for a in arr), default=0.0)
@@ -2351,42 +2636,44 @@ class MetadataDB:
         }
 
     def recent_stats(self, limit: int = 12) -> list[dict]:
-        """Recently-played rows (most recent first) for 'Jump back in'."""
+        """Recently-played rows (most recent first) for 'Jump back in' (active profile)."""
         limit = max(1, min(100, int(limit)))
         rows = self.conn.execute(
             "SELECT " + ", ".join(self._STATS_COLS) +
-            " FROM song_stats WHERE last_played_at IS NOT NULL " +
+            " FROM song_stats WHERE profile_id = ? AND last_played_at IS NOT NULL " +
             self._existing_song_filter() +
             "ORDER BY last_played_at DESC LIMIT ?",
-            (limit,),
+            (self.get_active_profile_id(), limit),
         ).fetchall()
         return [dict(zip(self._STATS_COLS, r)) for r in rows]
 
     def best_accuracy_map(self) -> dict:
-        """{filename: best_accuracy} across all arrangements, for batch-badging
-        the library grid in one request. Includes every SCORED song (plays > 0)
-        — even a genuine 0% best — but excludes resume-only rows (plays == 0,
-        which carry a default best_accuracy of 0 and shouldn't badge)."""
+        """{filename: best_accuracy} across all arrangements for the active
+        profile, for batch-badging the library grid in one request. Includes
+        every SCORED song (plays > 0) — even a genuine 0% best — but excludes
+        resume-only rows (plays == 0, which carry a default best_accuracy of 0
+        and shouldn't badge)."""
         rows = self.conn.execute(
             "SELECT filename, MAX(best_accuracy), SUM(plays) FROM song_stats "
-            "WHERE 1=1 " + self._existing_song_filter() +   # skip dead songs (race-free)
-            "GROUP BY filename"
+            "WHERE profile_id = ? " + self._existing_song_filter() +   # skip dead songs (race-free)
+            "GROUP BY filename",
+            (self.get_active_profile_id(),),
         ).fetchall()
         return {r[0]: r[1] for r in rows if r[2] and r[2] > 0}
 
     def top_stats(self, limit: int = 5) -> list[dict]:
-        """Top scored songs (best score first) for the profile 'Your best
-        scores' panel. Aggregated per-song across arrangements (best score,
-        best accuracy, total plays), only SCORED songs (plays > 0), dead songs
-        skipped. Mirrors best_accuracy_map's grouping; enriched with metadata
-        by the /api/stats/top route."""
+        """Top scored songs (best score first) for the active profile's 'Your
+        best scores' panel. Aggregated per-song across arrangements (best
+        score, best accuracy, total plays), only SCORED songs (plays > 0),
+        dead songs skipped. Mirrors best_accuracy_map's grouping; enriched
+        with metadata by the /api/stats/top route."""
         limit = max(1, min(50, int(limit)))
         rows = self.conn.execute(
             "SELECT filename, MAX(best_score), MAX(best_accuracy), SUM(plays) "
-            "FROM song_stats WHERE 1=1 " + self._existing_song_filter() +   # skip dead songs
+            "FROM song_stats WHERE profile_id = ? " + self._existing_song_filter() +   # skip dead songs
             "GROUP BY filename HAVING SUM(plays) > 0 "
             "ORDER BY MAX(best_score) DESC, MAX(best_accuracy) DESC LIMIT ?",
-            (limit,),
+            (self.get_active_profile_id(), limit),
         ).fetchall()
         return [
             {"filename": r[0], "best_score": r[1], "best_accuracy": r[2], "plays": r[3]}
@@ -2431,7 +2718,8 @@ class MetadataDB:
         limit = max(1, min(24, int(limit)))
         rows = self.conn.execute(
             "SELECT filename, arrangement, best_accuracy, plays, last_played_at "
-            "FROM song_stats WHERE 1=1 " + self._existing_song_filter()
+            "FROM song_stats WHERE profile_id = ? " + self._existing_song_filter(),
+            (self.get_active_profile_id(),),
         ).fetchall()
         # Aggregate per song: best accuracy + the arrangement that owns it, total
         # plays, most-recent play (used as a stable tiebreak).
@@ -2979,13 +3267,15 @@ class MetadataDB:
         return self.conn.execute("SELECT COUNT(*) FROM wanted").fetchone()[0]
 
     def continue_session(self) -> dict | None:
-        """Most-recently-played song (from song_stats) + metadata, for the
-        Continue-Playing card. Null when nothing has been played."""
+        """Most-recently-played song (from song_stats) + metadata for the
+        active profile, for the Continue-Playing card. Null when nothing has
+        been played."""
         row = self.conn.execute(
             "SELECT filename, arrangement, last_position FROM song_stats "
-            "WHERE last_played_at IS NOT NULL " +
+            "WHERE profile_id = ? AND last_played_at IS NOT NULL " +
             self._existing_song_filter() +   # skip dead songs (race-free)
-            "ORDER BY last_played_at DESC LIMIT 1"
+            "ORDER BY last_played_at DESC LIMIT 1",
+            (self.get_active_profile_id(),),
         ).fetchone()
         if not row:
             return None
@@ -3004,7 +3294,9 @@ class MetadataDB:
         }
 
     def favorite_set(self) -> set[str]:
-        return {r[0] for r in self.conn.execute("SELECT filename FROM favorites").fetchall()}
+        return {r[0] for r in self.conn.execute(
+            "SELECT filename FROM favorites WHERE profile_id = ?", (self.get_active_profile_id(),)
+        ).fetchall()}
 
     # Every per-perspective column, in one place, so the SELECT, the INSERT and
     # the scanner's "was this ever extracted?" check can never drift apart.

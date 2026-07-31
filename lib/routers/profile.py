@@ -136,3 +136,51 @@ def api_profile_progress():
     """One call for the whole profile badge: {level, xp, xp_in_level,
     xp_to_next, current_streak, best_streak, last_active_date}."""
     return appstate.meta_db.get_progress()
+
+
+# ── Multi-profile switching (feedBack#swap-profiles) ────────────────────────
+# Password-less, device-local profile switching — like a Netflix/Steam
+# "who's playing" picker, not a real auth system (feedBack has none). Every
+# other endpoint in this file (and every profile-scoped read/write elsewhere
+# in the app) implicitly operates on whichever profile is "active"; these
+# four endpoints are the only ones that manage the roster + the active
+# pointer itself. Switching profiles is a full-page reload client-side (the
+# active pointer is server-side/device-global, not per-request), so every
+# subsequent request — including the WebSocket highway connections — sees the
+# new profile with no additional plumbing.
+
+@router.get("/api/profiles")
+def api_list_profiles():
+    return {"profiles": appstate.meta_db.list_profiles()}
+
+
+@router.post("/api/profiles")
+def api_create_profile(data: dict):
+    """Create a new profile. Body: {display_name}. Does NOT switch to it —
+    call POST /api/profiles/{id}/activate (the client reloads after)."""
+    name = _clean_str(data.get("display_name"))
+    if not (1 <= len(name) <= 32):
+        return JSONResponse({"error": "Display name must be 1–32 characters."}, status_code=400)
+    profile = appstate.meta_db.create_profile(name)
+    return {"profiles": appstate.meta_db.list_profiles(), "created": profile}
+
+
+@router.post("/api/profiles/{profile_id}/activate")
+def api_activate_profile(profile_id: int):
+    try:
+        appstate.meta_db.activate_profile(profile_id)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=404)
+    return {"profiles": appstate.meta_db.list_profiles()}
+
+
+@router.delete("/api/profiles/{profile_id}")
+def api_delete_profile(profile_id: int):
+    """Delete a profile and everything scoped to it (song stats, favorites,
+    XP, career/shop progress, achievements — see MetadataDB.delete_profile
+    and the achievements plugin's own per-profile tables). Irreversible."""
+    try:
+        appstate.meta_db.delete_profile(profile_id)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return {"profiles": appstate.meta_db.list_profiles()}

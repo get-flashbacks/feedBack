@@ -59,36 +59,71 @@ def _conn():
     return conn
 
 
+def _add_profile_id_to_pk(conn, table, extra_pk_cols):
+    """Idempotently fold a `profile_id` column into `table`'s primary key,
+    backfilling every existing row to profile_id=1 (today's one-and-only
+    profile before feedBack#swap-profiles). Mirrors
+    metadata_db.MetadataDB._add_profile_id_to_pk — reads the live column
+    list via PRAGMA so it can't drift from the CREATE TABLE statement above.
+    No-ops once the table already has the column."""
+    cols = [r[1] for r in conn.execute(f"PRAGMA table_info({table})")]
+    if "profile_id" in cols or not cols:
+        return
+    info = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    col_defs = []
+    for _, name, coltype, notnull, dflt, _pk in info:
+        d = f"{name} {coltype or 'TEXT'}"
+        if notnull:
+            d += " NOT NULL"
+        if dflt is not None:
+            d += f" DEFAULT {dflt}"
+        col_defs.append(d)
+    col_list = ", ".join(cols)
+    pk_list = ", ".join(["profile_id"] + extra_pk_cols)
+    conn.execute(f"ALTER TABLE {table} RENAME TO {table}__pid_migrate")
+    conn.execute(
+        f"CREATE TABLE {table} (profile_id INTEGER NOT NULL DEFAULT 1, "
+        f"{', '.join(col_defs)}, PRIMARY KEY ({pk_list}))"
+    )
+    conn.execute(f"INSERT INTO {table} (profile_id, {col_list}) SELECT 1, {col_list} FROM {table}__pid_migrate")
+    conn.execute(f"DROP TABLE {table}__pid_migrate")
+
+
 def _init_db():
     conn = _conn()
     try:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS unlocks (
-                achievement_id TEXT PRIMARY KEY,
-                cls            TEXT NOT NULL,          -- 'competency' | 'feat'
-                disp_category  TEXT,                   -- global/guitar/bass/...
-                source_id      TEXT,
-                tier           INTEGER NOT NULL DEFAULT 0,
-                unlocked_at    TEXT,
-                synced         INTEGER NOT NULL DEFAULT 0
+                profile_id      INTEGER NOT NULL DEFAULT 1,
+                achievement_id  TEXT NOT NULL,
+                cls             TEXT NOT NULL,          -- 'competency' | 'feat'
+                disp_category   TEXT,                   -- global/guitar/bass/...
+                source_id       TEXT,
+                tier            INTEGER NOT NULL DEFAULT 0,
+                unlocked_at     TEXT,
+                synced          INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (profile_id, achievement_id)
             )
             """
         )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS counters (
-                key   TEXT PRIMARY KEY,
-                value INTEGER NOT NULL DEFAULT 0
+                profile_id INTEGER NOT NULL DEFAULT 1,
+                key        TEXT NOT NULL,
+                value      INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (profile_id, key)
             )
             """
         )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS comp_ledger (
+                profile_id   INTEGER NOT NULL DEFAULT 1,
                 criterion_id TEXT NOT NULL,
                 token        TEXT NOT NULL,
-                PRIMARY KEY (criterion_id, token)
+                PRIMARY KEY (profile_id, criterion_id, token)
             )
             """
         )
@@ -102,9 +137,27 @@ def _init_db():
             )
             """
         )
+        # Upgrading installs: these tables predate multi-profile support and
+        # were created above (IF NOT EXISTS is a no-op on an existing file) —
+        # fold profile_id into each one's primary key, backfilling profile_id=1.
+        _add_profile_id_to_pk(conn, "unlocks", ["achievement_id"])
+        _add_profile_id_to_pk(conn, "counters", ["key"])
+        _add_profile_id_to_pk(conn, "comp_ledger", ["criterion_id", "token"])
         conn.commit()
     finally:
         conn.close()
+
+
+def _active_profile_id():
+    """The active profile id from core's meta_db, or 1 if unavailable (e.g.
+    a standalone test harness that never wired meta_db in)."""
+    db = _state["meta_db"]
+    if db is not None and hasattr(db, "get_active_profile_id"):
+        try:
+            return int(db.get_active_profile_id())
+        except Exception:  # noqa: BLE001 — never let identity resolution break a request
+            return 1
+    return 1
 
 
 def _now_iso():
@@ -258,59 +311,62 @@ def _chart_key(chart):
     return "chart_plays:" + hashlib.sha1(str(chart).encode("utf-8")).hexdigest()[:16]
 
 
-def _read_counters(conn):
+def _read_counters(conn, pid):
     # Excludes the per-chart `chart_plays:*` rows: they are bumped + read
     # individually via _bump_counter and would otherwise make this aggregate
     # round-trip O(distinct charts played) on every activity POST.
     return {
         row["key"]: int(row["value"])
-        for row in conn.execute("SELECT key, value FROM counters WHERE key NOT LIKE 'chart_plays:%'")
+        for row in conn.execute(
+            "SELECT key, value FROM counters WHERE profile_id=? AND key NOT LIKE 'chart_plays:%'", (pid,))
     }
 
 
-def _write_counters(conn, counters):
+def _write_counters(conn, pid, counters):
     for key, value in counters.items():
         conn.execute(
-            "INSERT INTO counters(key, value) VALUES (?, ?) "
-            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            (key, int(value)),
+            "INSERT INTO counters(profile_id, key, value) VALUES (?, ?, ?) "
+            "ON CONFLICT(profile_id, key) DO UPDATE SET value=excluded.value",
+            (pid, key, int(value)),
         )
 
 
-def _bump_counter(conn, key, delta):
+def _bump_counter(conn, pid, key, delta):
     """Increment a counter and return the new value (used for per-chart plays)."""
     conn.execute(
-        "INSERT INTO counters(key, value) VALUES (?, ?) "
-        "ON CONFLICT(key) DO UPDATE SET value=value+excluded.value",
-        (key, int(delta)),
+        "INSERT INTO counters(profile_id, key, value) VALUES (?, ?, ?) "
+        "ON CONFLICT(profile_id, key) DO UPDATE SET value=value+excluded.value",
+        (pid, key, int(delta)),
     )
-    row = conn.execute("SELECT value FROM counters WHERE key=?", (key,)).fetchone()
+    row = conn.execute("SELECT value FROM counters WHERE profile_id=? AND key=?", (pid, key)).fetchone()
     return int(row["value"]) if row else int(delta)
 
 
-def _earned_feat_tiers(conn):
+def _earned_feat_tiers(conn, pid):
     return {
         row["achievement_id"]: int(row["tier"])
-        for row in conn.execute("SELECT achievement_id, tier FROM unlocks WHERE cls='feat'")
+        for row in conn.execute(
+            "SELECT achievement_id, tier FROM unlocks WHERE profile_id=? AND cls='feat'", (pid,))
     }
 
 
-def _record_unlock(conn, ach_id, cls, disp_category, source_id, tier, at):
+def _record_unlock(conn, pid, ach_id, cls, disp_category, source_id, tier, at):
     """Idempotent upsert; only advances the tier upward. Returns True if changed."""
-    row = conn.execute("SELECT tier FROM unlocks WHERE achievement_id=?", (ach_id,)).fetchone()
+    row = conn.execute(
+        "SELECT tier FROM unlocks WHERE profile_id=? AND achievement_id=?", (pid, ach_id)).fetchone()
     if row is not None and int(row["tier"]) >= int(tier):
         return False
     conn.execute(
         """
-        INSERT INTO unlocks(achievement_id, cls, disp_category, source_id, tier, unlocked_at, synced)
-        VALUES (?, ?, ?, ?, ?, ?, 0)
-        ON CONFLICT(achievement_id) DO UPDATE SET
+        INSERT INTO unlocks(profile_id, achievement_id, cls, disp_category, source_id, tier, unlocked_at, synced)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+        ON CONFLICT(profile_id, achievement_id) DO UPDATE SET
             tier=excluded.tier,
             cls=excluded.cls,
             disp_category=COALESCE(excluded.disp_category, unlocks.disp_category),
             source_id=COALESCE(excluded.source_id, unlocks.source_id)
         """,
-        (ach_id, cls, disp_category, source_id, int(tier), at or _now_iso()),
+        (pid, ach_id, cls, disp_category, source_id, int(tier), at or _now_iso()),
     )
     return True
 
@@ -396,6 +452,7 @@ def setup(app, context):
     @app.post("/api/plugins/achievements/activity")
     def post_activity(body: ActivityIn):
         engine = _state["engine"]
+        pid = _active_profile_id()
         with _lock:
             conn = _conn()
             try:
@@ -403,7 +460,7 @@ def setup(app, context):
                 # first (stable key) so apply_activity() just takes the new max.
                 chart_play_count = None
                 if body.song_done and body.chart:
-                    chart_play_count = _bump_counter(conn, _chart_key(body.chart), 1)
+                    chart_play_count = _bump_counter(conn, pid, _chart_key(body.chart), 1)
                 # Night-window ledger → consecutive-night run. Computed here but
                 # NOT written before the prev snapshot: it is folded into the delta
                 # below so prev_tiers reflects the OLD run and new_tiers the new one
@@ -413,14 +470,16 @@ def setup(app, context):
                 witching_run = None
                 if body.night_session and body.night_date:
                     conn.execute(
-                        "INSERT OR IGNORE INTO comp_ledger(criterion_id, token) VALUES ('witching', ?)",
-                        (body.night_date,),
+                        "INSERT OR IGNORE INTO comp_ledger(profile_id, criterion_id, token) "
+                        "VALUES (?, 'witching', ?)",
+                        (pid, body.night_date),
                     )
                     nights = [r["token"] for r in conn.execute(
-                        "SELECT token FROM comp_ledger WHERE criterion_id='witching'")]
+                        "SELECT token FROM comp_ledger WHERE profile_id=? AND criterion_id='witching'",
+                        (pid,))]
                     witching_run = engine.consecutive_run_length(nights)
 
-                counters = _read_counters(conn)
+                counters = _read_counters(conn, pid)
                 prev_tiers = engine.evaluate_feats(_state["feat_defs"], counters)
                 new_counters = engine.apply_activity(counters, {
                     "notes": body.notes,
@@ -433,7 +492,7 @@ def setup(app, context):
                 if witching_run is not None:
                     new_counters["witching_nights_run"] = max(
                         int(new_counters.get("witching_nights_run", 0) or 0), witching_run)
-                _write_counters(conn, new_counters)
+                _write_counters(conn, pid, new_counters)
                 new_tiers = engine.evaluate_feats(_state["feat_defs"], new_counters)
                 fresh = engine.diff_unlocks(prev_tiers, new_tiers)
                 unlocked = []
@@ -441,7 +500,7 @@ def setup(app, context):
                     f = _feat_by_id(fid) or {}
                     tier = new_tiers[fid]
                     at = _now_iso()
-                    if _record_unlock(conn, fid, "feat", f.get("category"), f.get("sourceId"), tier, at):
+                    if _record_unlock(conn, pid, fid, "feat", f.get("category"), f.get("sourceId"), tier, at):
                         _enqueue_feat_sync(conn, fid, at)
                         unlocked.append(_feat_payload(fid, f, tier))
                 conn.commit()
@@ -453,11 +512,12 @@ def setup(app, context):
     def post_report_unlock(body: UnlockIn):
         cls = "feat" if body.kind == "feat" else "competency"
         at = body.at or _now_iso()
+        pid = _active_profile_id()
         with _lock:
             conn = _conn()
             try:
                 changed = _record_unlock(
-                    conn, body.id, cls, body.category, body.sourceId, body.tier, at)
+                    conn, pid, body.id, cls, body.category, body.sourceId, body.tier, at)
                 # Only Feats sync; competency never enqueues (integration law +
                 # data-minimization contract).
                 if changed and cls == "feat":
@@ -475,16 +535,17 @@ def setup(app, context):
         of distinct days with a real advance → `steady_hands`) without us
         re-deriving competency from activity. Bookkeeping over events only.
         """
+        pid = _active_profile_id()
         with _lock:
             conn = _conn()
             try:
                 conn.execute(
-                    "INSERT OR IGNORE INTO comp_ledger(criterion_id, token) VALUES (?, ?)",
-                    (body.criterion_id, body.token),
+                    "INSERT OR IGNORE INTO comp_ledger(profile_id, criterion_id, token) VALUES (?, ?, ?)",
+                    (pid, body.criterion_id, body.token),
                 )
                 row = conn.execute(
-                    "SELECT COUNT(*) AS n FROM comp_ledger WHERE criterion_id=?",
-                    (body.criterion_id,),
+                    "SELECT COUNT(*) AS n FROM comp_ledger WHERE profile_id=? AND criterion_id=?",
+                    (pid, body.criterion_id),
                 ).fetchone()
                 conn.commit()
                 return {"ok": True, "count": int(row["n"]) if row else 0}
@@ -496,7 +557,7 @@ def setup(app, context):
         with _lock:
             conn = _conn()
             try:
-                earned = _earned_map(conn)
+                earned = _earned_map(conn, _active_profile_id())
             finally:
                 conn.close()
         return {"baseline": _state["baseline"], "earned": earned}
@@ -506,7 +567,7 @@ def setup(app, context):
         with _lock:
             conn = _conn()
             try:
-                return {"earned": list(_earned_map(conn).values())}
+                return {"earned": list(_earned_map(conn, _active_profile_id()).values())}
             finally:
                 conn.close()
 
@@ -516,7 +577,8 @@ def setup(app, context):
             conn = _conn()
             try:
                 rows = conn.execute(
-                    "SELECT achievement_id, tier, unlocked_at FROM unlocks WHERE cls='feat'"
+                    "SELECT achievement_id, tier, unlocked_at FROM unlocks WHERE profile_id=? AND cls='feat'",
+                    (_active_profile_id(),),
                 ).fetchall()
             finally:
                 conn.close()
@@ -538,7 +600,9 @@ def setup(app, context):
         with _lock:
             conn = _conn()
             try:
-                conn.execute("UPDATE unlocks SET synced=0 WHERE cls='feat'")
+                conn.execute(
+                    "UPDATE unlocks SET synced=0 WHERE profile_id=? AND cls='feat'",
+                    (_active_profile_id(),))
                 # Enqueue a wall removal only when we have an identity to key it
                 # by; the drain worker (below) POSTs it. Idempotent server-side.
                 if player_hash:
@@ -570,10 +634,11 @@ def _feat_payload(fid, feat, tier):
     }
 
 
-def _earned_map(conn):
+def _earned_map(conn, pid):
     out = {}
     for row in conn.execute(
-        "SELECT achievement_id, cls, disp_category, tier, unlocked_at FROM unlocks"
+        "SELECT achievement_id, cls, disp_category, tier, unlocked_at FROM unlocks WHERE profile_id=?",
+        (pid,),
     ):
         out[row["achievement_id"]] = {
             "id": row["achievement_id"],
