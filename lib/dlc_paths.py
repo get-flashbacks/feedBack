@@ -18,10 +18,10 @@ from safepath import resolved_root
 
 
 def _get_dlc_dir(cfg: dict | None = None) -> Path | None:
-    # Only consider DLC_DIR if the env var was non-empty. `Path("")` collapses
+    # Only consider LIBRARY_DIR if the env var was non-empty. `Path("")` collapses
     # to `.` and reports `.is_dir() == True`, which would silently shadow the
     # config.json fallback. Checking the raw env string preserves
-    # `DLC_DIR=.` as a valid opt-in for cwd while keeping unset/empty out.
+    # `LIBRARY_DIR=.` as a valid opt-in for cwd while keeping unset/empty out.
     if appstate.dlc_dir_env and appstate.dlc_dir.is_dir():
         return appstate.dlc_dir
     if cfg is None:

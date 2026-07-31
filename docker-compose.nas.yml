@@ -7,11 +7,11 @@ services:
       - "8000:8000"
     volumes:
       # Song library folder on NAS
-      - /volume1/music/feedBack:/dlc
+      - /volume1/music/feedBack:/library
       # Persistent config, cache, favorites, loops, practice data
       - feedBack-config:/config
     environment:
-      - DLC_DIR=/dlc
+      - LIBRARY_DIR=/library
       - CONFIG_DIR=/config
       # Logging (optional)
       # - LOG_LEVEL=INFO        # DEBUG | INFO | WARNING | ERROR  (default: INFO)
