@@ -16,6 +16,18 @@ services:
       - ./lib:/app/lib
       - ./plugins:/app/plugins
       - ./.git:/app/.git:ro
+      # Sibling plugin repos cloned alongside this repo under D:\Github.
+      # Windows junctions inside ./plugins don't resolve through Docker
+      # Desktop's WSL2 9p bridge (they translate to /mnt/host/... symlinks
+      # that aren't mounted in the container), so these are bind-mounted
+      # directly instead.
+      - ../feedBack-plugin-fretboard:/app/plugins/fretboard
+      - ../feedBack-plugin-metronome:/app/plugins/metronome
+      - ../feedBack-plugin-piano:/app/plugins/piano
+      - ../feedBack-plugin-sectionmap:/app/plugins/section_map
+      - ../feedBack-plugin-splitscreen:/app/plugins/splitscreen
+      - ../feedback-plugin-difficulty-ladder:/app/plugins/difficulty_ladder
+      - ../feedBack-plugin-feedpakr:/app/plugins/feedpakr
     environment:
       - PYTHONPATH=/app/lib:/app
       - DLC_DIR=/dlc
