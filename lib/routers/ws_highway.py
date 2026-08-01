@@ -372,7 +372,7 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
         else:
             audio_id = Path(filename).stem.replace(" ", "_")
 
-        if is_slop:
+        if is_slop and loaded_slop is not None:
             # Stems are served via the sloppak file endpoint; the first stem
             # (or explicit default) is the core <audio> source. The stems
             # plugin replaces it with a mixed graph when active.
@@ -384,7 +384,7 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
                     {"id": s["id"], "url": url, "default": s["default"],
                      **{k: s[k] for k in ("name", "description") if k in s}})
             # Full-mix URL (served by the same /api/sloppak/.../file/ endpoint).
-            if loaded_slop is not None and loaded_slop.full_mix:
+            if loaded_slop.full_mix:
                 full_mix_url = (
                     f"/api/sloppak/{q_fn}/file/{quote(loaded_slop.full_mix)}"
                 )
@@ -405,6 +405,9 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
                 audio_url = full_mix_url
             else:
                 audio_error = "This sloppak has no playable stems."
+        elif is_slop:
+            # Sloppak failed to load — loaded_slop is None
+            audio_error = "Failed to load sloppak"
         else:
             appstate.audio_cache_dir.mkdir(parents=True, exist_ok=True)
             # Check if audio already cached (writable cache dir or legacy static dir)
