@@ -212,6 +212,10 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
                     None,
                     lambda: _ctx.run(sloppak_mod.load_song, filename, dlc, appstate.sloppak_cache_dir),
                 )
+                if loaded_slop is None:
+                    await websocket.send_json({"error": "Failed to load sloppak"})
+                    await websocket.close()
+                    return
                 song = loaded_slop.song
                 tmp = str(loaded_slop.source_dir)
                 owns_tmp = False
