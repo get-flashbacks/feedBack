@@ -20,7 +20,13 @@ for arg in "$@"; do
   esac
 done
 
-if ! git remote get-url upstream >/dev/null 2>&1; then
+if upstream_url=$(git remote get-url upstream 2>/dev/null); then
+  if [ "$upstream_url" != "$UPSTREAM_URL" ]; then
+    echo "Refusing to sync: 'upstream' remote points to $upstream_url, not $UPSTREAM_URL." \
+         "Fix or remove the existing remote and re-run." >&2
+    exit 1
+  fi
+else
   echo "No 'upstream' remote found — adding $UPSTREAM_URL"
   git remote add upstream "$UPSTREAM_URL"
 fi
