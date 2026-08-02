@@ -1,0 +1,68 @@
+name: fork-audit
+
+# Fork-only checks — see docs/fork-maintenance.md. Deliberately its own file
+# (not a job added to upstream's ci.yml/ship-ci.yml) so pulling upstream
+# changes to those workflows never conflicts with this policy's own
+# enforcement of "keep core edits small and isolated".
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+
+  core-commit-labeling:
+    # Fails only on commits THIS PR introduces (relative to its base), so
+    # pre-existing history is never retroactively flagged.
+    name: core-commit-labeling
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Flag unlabeled core-touching commits introduced by this PR
+        run: |
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          commits=$(git rev-list "$BASE_SHA".."$HEAD_SHA")
+
+          fail=0
+          for sha in $commits; do
+            files=$(git show --name-only --pretty=format:"" "$sha")
+            core_hit=$(printf '%s\n' "$files" | grep -Ev '^(plugins/|docs/|tests/|scripts/|specs/|\.specify/)|^(CHANGELOG\.md|VERSION)$' || true)
+            [ -z "$core_hit" ] && continue
+
+            subject=$(git show -s --format=%s "$sha")
+            if ! printf '%s' "$subject" | grep -qE '^(core|hook|sync)(\([^)]*\))?:'; then
+              echo "::error::Commit $sha ('$subject') touches core path(s) but its subject isn't prefixed core:/hook:/sync: — see docs/fork-maintenance.md (Rule 2). Files touched: $(printf '%s' "$core_hit" | tr '\n' ' ')"
+              fail=1
+            fi
+          done
+          exit $fail
+
+  upstream-drift:
+    # Advisory only — never fails the PR. Nudges toward Rule 4 (sync often,
+    # in small increments) instead of letting drift build up silently.
+    name: upstream-drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Compare PR base against got-feedback/feedBack:main
+        run: |
+          git fetch --no-tags https://github.com/got-feedback/feedBack.git main:refs/remotes/canonical-upstream/main
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          behind=$(git rev-list --count "$BASE_SHA"..canonical-upstream/main)
+          echo "PR base is $behind commit(s) behind got-feedback/feedBack:main."
+          if [ "$behind" -gt 50 ]; then
+            echo "::warning::This branch's base is $behind commits behind got-feedback/feedBack:main. Consider running scripts/fork-sync.sh before adding more fork-only work (docs/fork-maintenance.md, Rule 4)."
+          fi
