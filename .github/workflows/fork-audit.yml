@@ -59,9 +59,15 @@ jobs:
 
       - name: Compare PR base against got-feedback/feedBack:main
         run: |
-          git fetch --no-tags https://github.com/got-feedback/feedBack.git main:refs/remotes/canonical-upstream/main
+          if ! git fetch --no-tags https://github.com/got-feedback/feedBack.git main:refs/remotes/canonical-upstream/main; then
+            echo "::warning::Unable to fetch got-feedback/feedBack:main; skipping upstream drift check."
+            exit 0
+          fi
           BASE_SHA="${{ github.event.pull_request.base.sha }}"
-          behind=$(git rev-list --count "$BASE_SHA"..canonical-upstream/main)
+          if ! behind=$(git rev-list --count "$BASE_SHA"..canonical-upstream/main); then
+            echo "::warning::Unable to calculate upstream drift; skipping check."
+            exit 0
+          fi
           echo "PR base is $behind commit(s) behind got-feedback/feedBack:main."
           if [ "$behind" -gt 50 ]; then
             echo "::warning::This branch's base is $behind commits behind got-feedback/feedBack:main. Consider running scripts/fork-sync.sh before adding more fork-only work (docs/fork-maintenance.md, Rule 4)."

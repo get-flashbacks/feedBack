@@ -22,8 +22,8 @@ done
 
 if upstream_url=$(git remote get-url upstream 2>/dev/null); then
   if [ "$upstream_url" != "$UPSTREAM_URL" ]; then
-    echo "Refusing to sync: 'upstream' remote points to $upstream_url, not $UPSTREAM_URL." \
-         "Fix or remove the existing remote and re-run." >&2
+    echo "Refusing to sync: 'upstream' remote does not point to the canonical" \
+         "$UPSTREAM_URL. Fix or remove the existing remote and re-run." >&2
     exit 1
   fi
 else
@@ -32,7 +32,7 @@ else
 fi
 
 echo "Fetching upstream/main..."
-git fetch upstream main
+git fetch upstream main:refs/remotes/upstream/main
 
 behind=$(git rev-list --count HEAD..upstream/main)
 ahead=$(git rev-list --count upstream/main..HEAD)
