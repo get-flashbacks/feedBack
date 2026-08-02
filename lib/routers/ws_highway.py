@@ -213,6 +213,8 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
                     lambda: _ctx.run(sloppak_mod.load_song, filename, dlc, appstate.sloppak_cache_dir),
                 )
                 if loaded_slop is None:
+                    _keepalive_active = False
+                    keepalive_task.cancel()
                     await websocket.send_json({"error": "Failed to load sloppak"})
                     await websocket.close()
                     return
