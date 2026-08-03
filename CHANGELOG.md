@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Failed sloppak loads at the highway websocket no longer crash on a `None` song.**
+  When `sloppak_mod.load_song()` returns `None` (cache corruption, partial
+  extraction, etc.), the handler previously dereferenced `loaded_slop.song`
+  before any guard existed, crashing the connection instead of reporting the
+  failure. The load-failure guard now sits immediately after the load call —
+  the handler sends a `Failed to load sloppak` error and closes the socket
+  instead of continuing into arrangement/stem access with a `None` song.
+
 ### Added
 - **Core reader for source rigs (feedpak 1.18.0).** A pack can declare what a
   MIDI part should sound like by binding a rig; core now reads that binding and

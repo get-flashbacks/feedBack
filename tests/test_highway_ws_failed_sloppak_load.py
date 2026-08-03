@@ -12,6 +12,7 @@ class _CapturingWS:
         self.messages = []
         self.accepted = False
         self.closed = False
+        self.close_calls = 0
 
     async def accept(self):
         self.accepted = True
@@ -24,6 +25,7 @@ class _CapturingWS:
         return ""
 
     async def close(self):
+        self.close_calls += 1
         self.closed = True
 
 
@@ -60,4 +62,8 @@ def test_sloppak_loader_returning_none_sends_error_without_touching_stems(
 
     assert ws.accepted is True
     assert ws.closed is True
-    assert {"error": "Failed to load sloppak"} in ws.messages
+    assert ws.close_calls == 1
+    assert ws.messages == [
+        {"type": "loading", "stage": "Extracting..."},
+        {"error": "Failed to load sloppak"},
+    ]
