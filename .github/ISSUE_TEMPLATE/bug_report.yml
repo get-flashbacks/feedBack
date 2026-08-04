@@ -1,0 +1,71 @@
+name: Bug report
+description: Report something broken or unexpectedly behaving in this FeedBack repo.
+title: "[Bug]: "
+labels: ["bug", "needs triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this for reproducible failures. Include the smallest chart, plugin state, or workflow that shows the issue.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What is happening?
+      placeholder: Describe the problem in one or two sentences.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - backend API / server.py
+        - frontend app / static
+        - chart import/export
+        - player/highway rendering
+        - plugin system
+        - Docker or deployment
+        - documentation
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: What should someone do to see the issue?
+      placeholder: |
+        1. Open FeedBack...
+        2. Enable/open...
+        3. Play/import/change...
+        4. See...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: Useful validation
+      description: What should be checked when this is fixed?
+      placeholder: Run the app, exercise the affected route/screen/import path, and check console/server logs.
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      placeholder: Browser/OS, FeedBack version or commit, plugin version, Docker image, etc.
+  - type: textarea
+    id: notes
+    attributes:
+      label: Additional notes
+      description: Logs, screenshots, chart files, console output, or related PRs/issues.
