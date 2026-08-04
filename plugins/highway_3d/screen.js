@@ -16662,6 +16662,12 @@
     // arrangements that merely contain these as substrings (e.g. a
     // "BasslineKeys" arrangement would otherwise match `bass`).
     window.feedBackViz_highway_3d.matchesArrangement = function (songInfo) {
+        // Manifest `type: keys` is authoritative and independent of the
+        // display name — a keys arrangement literally named "Combo" (GP
+        // import quirk) would otherwise match the /combo/ keyword below
+        // and steal the song from the piano/keys viz. Yield whenever the
+        // active arrangement's real type says keys.
+        if (songInfo && songInfo.arrangement_type === 'keys') return false;
         const arr = (songInfo && songInfo.arrangement) || '';
         return /\b(?:lead|rhythm|bass|combo|guitar)\b/i.test(arr);
     };
