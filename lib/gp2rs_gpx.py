@@ -2469,12 +2469,20 @@ def _auto_select_gpx(tracks: list[dict]) -> tuple[list[int], dict[int, str]]:
 
         is_bass = (t['string_pitches'] and max(t['string_pitches']) <= 48) \
             or t['midi_program'] in BASS_PROGS
-        is_guitar = bool(t['string_pitches']) and not is_bass
         is_keys = (not t['string_pitches'] and t['midi_program'] in KEYS_PROGS) \
             or any(kw in name_l for kw in ('piano', 'keys', 'organ'))
+        # GP6+ often notates piano/keys parts on a fretted string template, so
+        # string_pitches alone can't distinguish a keyboard part from a real
+        # guitar. Check is_keys (which also matches on name/program) before
+        # is_guitar, so a track explicitly named "Keys ..." isn't swept into
+        # the unhinted-guitar Lead/Rhythm/Combo bucket just because it has
+        # string tuning data (feedBack: "Combo" mislabeled piano arrangement).
+        is_guitar = bool(t['string_pitches']) and not is_bass and not is_keys
 
         if is_bass:
             selected.append((i, 'bass'))
+        elif is_keys:
+            selected.append((i, 'keys'))
         elif is_guitar:
             # Honor "lead"/"rhythm" in the GP track name so two guitars keep
             # the author's roles instead of being labelled by appearance order
@@ -2485,8 +2493,6 @@ def _auto_select_gpx(tracks: list[dict]) -> tuple[list[int], dict[int, str]]:
                 selected.append((i, 'guitar_rhythm'))
             else:
                 selected.append((i, 'guitar'))
-        elif is_keys:
-            selected.append((i, 'keys'))
 
     if not selected:
         for i, t in enumerate(tracks):
