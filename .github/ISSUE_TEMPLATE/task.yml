@@ -1,0 +1,56 @@
+name: Task or improvement
+description: Track cleanup, refactors, documentation, research, or non-bug work.
+title: "[Task]: "
+labels: ["task", "needs triage"]
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: What should be accomplished?
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - backend API / server.py
+        - frontend app / static
+        - chart import/export
+        - player/highway rendering
+        - plugin system
+        - Docker or deployment
+        - documentation
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: What is included, and what is intentionally out of scope?
+  - type: textarea
+    id: checklist
+    attributes:
+      label: Checklist
+      description: Break the work into concrete steps.
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: true
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      options:
+        - low
+        - medium
+        - high
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation
+      placeholder: Run the app, exercise the affected route/screen/import path, and check console/server logs.

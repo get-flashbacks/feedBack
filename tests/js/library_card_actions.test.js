@@ -29,6 +29,37 @@ test('enabled() reflected in the summary but action still listed', () => {
     assert.strictEqual(on.enabled, true);
 });
 
+test('label and icon callbacks resolve per listed song', () => {
+    freshIds();
+    reg.register({
+        id: 'difficulty',
+        label: (s) => `${s.progress}%`,
+        icon: (s) => (s.progress >= 90 ? '*' : ''),
+        run() {},
+    });
+    assert.deepStrictEqual(
+        reg.list({ filename: 'easy.sloppak', progress: 42 }).map((a) => ({ label: a.label, icon: a.icon })),
+        [{ label: '42%', icon: '' }],
+    );
+    assert.deepStrictEqual(
+        reg.list({ filename: 'done.sloppak', progress: 96 }).map((a) => ({ label: a.label, icon: a.icon })),
+        [{ label: '96%', icon: '*' }],
+    );
+});
+
+test('label and icon callback errors fall back safely', () => {
+    freshIds();
+    reg.register({
+        id: 'bad-dynamic',
+        label() { throw new Error('label unavailable'); },
+        icon() { throw new Error('icon unavailable'); },
+        run() {},
+    });
+    const [action] = reg.list({ filename: 'song.sloppak' });
+    assert.strictEqual(action.label, 'bad-dynamic');
+    assert.strictEqual(action.icon, '');
+});
+
 test('run() invokes the handler and reports handled', async () => {
     freshIds();
     let got = null;
