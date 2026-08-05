@@ -12096,47 +12096,41 @@
                         : (maxSus > 0 && now < ch.t + maxSus) ? ch.t
                         : now;
                     const chAncB = anchorLaneBoundsAt(anchors, _chAnchorT);
-                    // Open-string X: chart <anchor> lane centre when present (not curX /
-                    // fretted centroid), matching highway span.
-                    let chordCX = curX;
-                    if (chAncB) chordCX = (xFret(chAncB.dMin) + xFret(chAncB.dMax)) / 2;
-                    else {
-                        let cxL = Infinity, cxR = -Infinity, fretted = 0;
-                        for (const cn of chordNotes) {
-                            if (cn.f > 0) {
-                                const fx = xFretMid(cn.f);
-                                if (fx < cxL) cxL = fx;
-                                if (fx > cxR) cxR = fx;
-                                fretted++;
-                            }
+
+                    // Fretted-note range for this chord, computed once and shared by
+                    // both the open-string X and the frame box below, so the two
+                    // never disagree about whether the anchor is trustworthy.
+                    let fMinCh = 99, fMaxCh = 0, anyFretted = false;
+                    for (const [, f] of chShape) {
+                        if (f > 0) {
+                            anyFretted = true;
+                            fMinCh = Math.min(fMinCh, f);
+                            fMaxCh = Math.max(fMaxCh, f);
                         }
-                        if (fretted > 0) chordCX = (cxL + cxR) / 2;
                     }
+                    // Prefer the anchor span so chord frames/open strings align with
+                    // the highway lane window — BUT only when the chord's fretted
+                    // notes actually fall within the anchor range. If the anchor at
+                    // this chord's time doesn't cover the chord's frets (e.g. a chord
+                    // at frets 1–2 with an anchor locked to frets 6–9, as happens with
+                    // some GP-imported charts), trusting the anchor would strand the
+                    // open strings and the frame box away from where the chord is
+                    // actually being played — fall back to chord-fret-based bounds.
+                    const anchorCoversChordFrets = chAncB && anyFretted
+                        ? (fMinCh >= chAncB.dMin && fMaxCh <= chAncB.dMax)
+                        : true; // all-open chord: anchor centre is fine
+
+                    // Open-string X: chart <anchor> lane centre when it covers this
+                    // chord's fretted notes, else the fretted-note centroid, else curX.
+                    let chordCX = curX;
+                    if (chAncB && anchorCoversChordFrets) chordCX = (xFret(chAncB.dMin) + xFret(chAncB.dMax)) / 2;
+                    else if (anyFretted) chordCX = (xFretMid(fMinCh) + xFretMid(fMaxCh)) / 2;
 
                     // Horizontals for chord frame + open-string mesh width. With anchors,
                     // span matches HWY lane columns (wire dMin..dMax); no extra pad.
                     let chordFrameXL = null, chordFrameXR = null, chordOpenBoxW = null;
                     let chordFrameAnchorMatched = false;
                     if (chShape.size > 1) {
-                        let fMinCh = 99, fMaxCh = 0, anyFretted = false;
-                        for (const [, f] of chShape) {
-                            if (f > 0) {
-                                anyFretted = true;
-                                fMinCh = Math.min(fMinCh, f);
-                                fMaxCh = Math.max(fMaxCh, f);
-                            }
-                        }
-                        // Prefer the anchor span so chord frames and arpeggio
-                        // frames align with the highway lane window — BUT only
-                        // when the chord's fretted notes actually fall within
-                        // the anchor range. If the anchor at this chord's time
-                        // doesn't cover the chord's frets (e.g. a chord at frets
-                        // 2–4 with an anchor locked to frets 5–8), the framebox
-                        // would clip the very gems it's supposed to contain, so
-                        // fall back to chord-fret-based bounds instead.
-                        const anchorCoversChordFrets = chAncB && anyFretted
-                            ? (fMinCh >= chAncB.dMin && fMaxCh <= chAncB.dMax)
-                            : true; // all-open chord: anchor centre is fine
                         if (chAncB && anchorCoversChordFrets) {
                             chordFrameXL = xFret(chAncB.dMin);
                             chordFrameXR = xFret(chAncB.dMax);
