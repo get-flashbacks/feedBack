@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+
 - **Failed sloppak loads at the highway websocket no longer crash on a `None` song.**
   When `sloppak_mod.load_song()` returns `None` (cache corruption, partial
   extraction, etc.), the handler previously dereferenced `loaded_slop.song`
