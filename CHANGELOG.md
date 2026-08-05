@@ -324,6 +324,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bar shorter than that meter shortens the count by its length: a 1-beat pickup
   in 4/4 counts "1 2 3" and the music enters on 4. Songs without beats — pre-chart,
   minigames, synthetic highways — still get four.
+- **highway_3d chord diagram no longer mirrors on Invert.** The top-left chord
+  diagram overlay (`drawChordDiagram()`) was flipping its column order
+  (high-e/low-E swapped) whenever the highway's Invert toggle was on, passed
+  through as `inverted: _invertedCached` at both call sites. The diagram's
+  orientation should be fixed regardless of that toggle, so both call sites
+  now pass `inverted: false`. Note: `plugins/highway_3d/CLAUDE.md` had
+  documented the mirroring as this overlay's contract, but that line traces
+  only to a single squashed "Clean release snapshot" commit with no
+  surviving design rationale — treated here as an inaccurate description of
+  a bug, not a protected feature, and updated accordingly.
 - **GP8 asset resolution honours the directory the registry named.**
   `<EmbeddedFilePath>` is matched on filename stem so a format variant of the
   same recording can win (an `.ogg` beside the declared `.mp3` is copied out

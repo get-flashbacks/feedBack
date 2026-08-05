@@ -16544,7 +16544,9 @@
                                 ? Math.min(1.0, Math.max(0, (bundle.currentTime - _diagPrev.t) / DIAG_ENTRANCE_S))
                                 : 1.0,
                             canvasW: lyricsCanvas.width, canvasH: lyricsCanvas.height,
-                            inverted: _invertedCached,
+                            // Chord diagram orientation is fixed regardless of the
+                            // highway's own Invert toggle.
+                            inverted: false,
                             sizeSlider: chordDiagramSize, position: chordDiagramPosition,
                             nStr: _diagPrev.nStr ?? nStr,
                             lyricsBottom,
@@ -16558,7 +16560,9 @@
                             opacity: Math.max(0, 1 + (_diagChord.t - bundle.currentTime) / DIAG_LINGER_S),
                             entranceT: _diagEntranceT,
                             canvasW: lyricsCanvas.width, canvasH: lyricsCanvas.height,
-                            inverted: _invertedCached,
+                            // Chord diagram orientation is fixed regardless of the
+                            // highway's own Invert toggle.
+                            inverted: false,
                             sizeSlider: chordDiagramSize, position: chordDiagramPosition,
                             nStr: _diagChord.nStr ?? nStr,
                             lyricsBottom,

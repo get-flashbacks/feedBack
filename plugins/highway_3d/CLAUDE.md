@@ -124,7 +124,7 @@ Each entry names the function or banner you should grep for, plus key sub-blocks
 
 ### Lyrics & overlays
 - **Lyrics overlay** → `drawLyrics()`. 2D canvas, top centre, semi-transparent rounded background, syllable-level highlighting (current syllable in white, played in muted, upcoming in dim).
-- **Chord diagram overlay** → `drawChordDiagram()` (see "Chords" above). 2D canvas, top-left, fades over the 0.55 s linger window. Respects `inverted` (column 0 is high-e when inverted, low-E otherwise).
+- **Chord diagram overlay** → `drawChordDiagram()` (see "Chords" above). 2D canvas, top-left, fades over the 0.55 s linger window. `drawChordDiagram()` still accepts an `inverted` param (column 0 is high-e when inverted, low-E otherwise), but the two call sites always pass `inverted: false` — the diagram's orientation is fixed and does not mirror when the highway's own Invert toggle is on.
 - **The `lyricsCanvas`** is created in `initScene()` with `z-index:1`, appended to `wrap` **after** `ren.domElement` — this is the empirically-correct stacking order for all browsers/contexts (including splitscreen panels with `position:relative; overflow:hidden`). Don't reorder; see Pitfall #5.
 
 ### Splitscreen
