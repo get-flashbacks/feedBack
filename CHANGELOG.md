@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Fixed stored XSS in the retune modal.** `retuneSong()` injected
+  `title`/`target`/`msg.filename`/`msg.error` into a modal's `innerHTML` via
+  unescaped template literals. `song.title` is attacker-influenceable
+  (imported GP/MusicXML/sloppak metadata) and reaches this sink directly
+  from the library card's "Convert to E Standard" menu action. Wrapped all
+  four values in the existing `esc()` helper, matching the escaping pattern
+  used everywhere else in the file.
+
 ### Added
 - Library card actions can now provide per-song label and icon callbacks, so
   plugins can render dynamic card badges without DOM patching.
