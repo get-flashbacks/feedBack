@@ -40,8 +40,8 @@ jobs:
             [ -z "$core_hit" ] && continue
 
             subject=$(git show -s --format=%s "$sha")
-            if ! printf '%s' "$subject" | grep -qE '^(core|hook|sync)(\([^)]*\))?:'; then
-              echo "::error::Commit $sha ('$subject') touches core path(s) but its subject isn't prefixed core:/hook:/sync: — see docs/fork-maintenance.md (Rule 2). Files touched: $(printf '%s' "$core_hit" | tr '\n' ' ')"
+            if ! printf '%s' "$subject" | grep -qE '^(core|hook|sync|fix)(\([^)]*\))?:'; then
+              echo "::error::Commit $sha ('$subject') touches core path(s) but its subject isn't prefixed core:/hook:/sync:/fix: — see docs/fork-maintenance.md (Rule 2). Files touched: $(printf '%s' "$core_hit" | tr '\n' ' ')"
               fail=1
             fi
           done

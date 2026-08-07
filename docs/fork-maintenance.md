@@ -46,6 +46,8 @@ P2 instead.
    - `hook:` — adding/expanding an extension point in core so a plugin can do
      the rest (P1)
    - `sync:` — merging/rebasing upstream changes in (P0)
+   - `fix:` — a bug or security fix to core (P3; use `fix(security):` for
+     security hotfixes following conventional-commit scope notation)
 
    Commits that touch only `plugins/**` don't need a prefix (that's the
    normal case and needs no special handling). This labeling is what lets
