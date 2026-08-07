@@ -51,10 +51,10 @@ P2 instead.
 
    Commits that touch only `plugins/**` don't need a prefix (that's the
    normal case and needs no special handling). This labeling is what lets
-   you `git log --grep '^core:'` or cherry-pick your minimal core diff onto a
-   fresh upstream tag when things diverge badly.
+   you `git log --grep -E '^(core|fix)(\([^)]*\))?:'` or cherry-pick your
+   minimal core diff onto a fresh upstream tag when things diverge badly.
 
-3. **Upstream PRs retire debt.** Whenever a `core:`/`hook:` commit lands
+3. **Upstream PRs retire debt.** Whenever a `core:`/`hook:`/`fix:` commit lands
    here, ask: *is this useful to anyone else running FeedBack?* If yes, open
    a PR against `got-feedback/feedBack:main` (see `CONTRIBUTING.md` for the
    DCO/licensing requirements). Once it merges upstream, your local edit
@@ -101,7 +101,7 @@ Is it a feature/fix specific to your own workflow?
 
 Tempted to edit a core file directly for convenience?
   -> P3 / avoid. If it's truly a bug fix (not new logic), it's OK, but
-     label the commit "core:" and consider sending it upstream — a real
+     label the commit "fix:" and consider sending it upstream — a real
      bug fix is exactly the kind of thing got-feedback/feedBack wants back.
 ```
 
@@ -113,8 +113,8 @@ Policy that isn't checked erodes. Two mechanisms enforce this one:
   touch or replace upstream's `ci.yml`/`ship-ci.yml`, to avoid creating a
   conflict in the exact file this policy is trying to keep conflict-free):
   - `core-commit-labeling` fails a PR if any commit it introduces (relative
-    to the PR base) touches a core path without a `core:`/`hook:`/`sync:`
-    prefix.
+    to the PR base) touches a core path without a `core:`/`hook:`/`sync:`/
+    `fix:` prefix.
   - `upstream-drift` is advisory-only: reports how many commits behind
     `got-feedback/feedBack:main` this branch is, and warns (without failing)
     once that count crosses a threshold, as a nudge for Rule 4.
