@@ -1166,8 +1166,8 @@ export function _ensureChordRenderCache(hwState, src) {
     // never collapse to a repeat box — those cues are authored on each
     // strum and must stay visible.
     let chainStart = 0;
-    for (let i = 0; i <= src.length; i++) {
-        const breakHere = (i === src.length) ||
+    for (let i = 0; i < src.length; i++) {
+        const breakHere = (i === src.length - 1) ||
             (i > chainStart && (src[i].id !== src[i - 1].id ||
                 Math.abs(src[i].t - src[i - 1].t) >= CHAIN_GAP_THRESHOLD));
         if (breakHere && i > chainStart) {
