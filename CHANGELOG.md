@@ -7,7 +7,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Fixed stored XSS in the retune modal.** `retuneSong()` injected
+  `title`/`target`/`msg.filename`/`msg.error` into a modal's `innerHTML` via
+  unescaped template literals. `song.title` is attacker-influenceable
+  (imported GP/MusicXML/sloppak metadata) and reaches this sink directly
+  from the library card's "Convert to E Standard" menu action. Wrapped all
+  four values in the existing `esc()` helper, matching the escaping pattern
+  used everywhere else in the file.
+- **Hardened GP/arrangement XML parsing against entity-expansion ("billion
+  laughs") DoS** (#45). `xml.etree.ElementTree` has no built-in protection
+  against maliciously nested XML entities on untrusted input; a crafted
+  imported GP or arrangement XML file could exhaust memory/CPU on the
+  request thread. Added `lib/safe_xml.py`, a shared hardened-parse helper
+  using `defusedxml` (now a `requirements.txt` dependency, falling back to
+  stdlib with a logged warning if somehow absent), and switched every
+  untrusted-XML parse call site (`lib/gp2rs_gpx.py`, `lib/loosefolder.py`,
+  `lib/song.py`, `lib/routers/ws_highway.py`) to use it. Rejections are
+  normalised to `ET.ParseError` so existing `except ET.ParseError:` call
+  sites keep working unmodified.
+- **Capped decompressed size on sloppak zip extraction** (#46). Nothing
+  bounded a `.sloppak` zip's total decompressed size during extraction — a
+  highly-compressed malicious/corrupt pack could exhaust disk space (a "zip
+  bomb"), independent of the unpack-cache LRU eviction (which only bounds
+  the aggregate cache after the fact). `_unpack_zip()` now sums each
+  member's declared size against an 8 GB default cap (no decompression
+  needed to check it), aborting and cleaning up any partial extraction if
+  exceeded. Override with `FEEDBACK_SLOPPAK_MAX_UNPACK_MB` (`0` disables).
+- **Added baseline security headers to every response** (#47):
+  `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
+  `Referrer-Policy: strict-origin-when-cross-origin`, and a
+  `Content-Security-Policy` restricting `object-src`, `base-uri`, and
+  `frame-ancestors`, and requiring `'self'` or `https:` for
+  script/style/media/connect origins. `script-src`/`style-src` still permit
+  `'unsafe-inline'` — the v3 UI's own HTML uses `onclick="..."` attributes
+  throughout and inline `<script>`/`<style>` blocks, none of it nonce'd or
+  externalized today, so a stricter policy would need that rewritten first.
+  Defense-in-depth: this would have limited the blast radius of the retune
+  XSS above (and any future/residual one) even before that fix landed.
+
 ### Added
+- Library card actions can now provide per-song label and icon callbacks, so
+  plugins can render dynamic card badges without DOM patching.
+- **Core reader for source rigs (feedpak 1.18.0).** A pack can declare what a
+  MIDI part should sound like by binding a rig; core now reads that binding and
+  hands it to the client instead of dropping it. Three parts: the
+  `tone_changes` WS message carries the pack's rig bindings (`base_rig`, and
+  `rig` per change) alongside the tone names it already sent; the manifest
+  `rigs:` key loads the pack's rig library (`rigs.json`, spec §7.9) verbatim;
+  and the binding precedence is resolved per spec §5.1/§5.2 — a manifest
+  arrangement entry's `tones` replaces the arrangement JSON's **wholesale**
+  (no field-level merge), while top-level `drum_tones` binds the primary drum
+  part as the fallback a `type: drums` entry's own `tones` outranks. Core
+  deliberately stops there: it does not select a realization or apply the
+  `intent.gm` floor, which belong to whatever actually voices the part. Packs
+  that bind no rig produce a byte-identical `tone_changes` payload, so existing
+  consumers are unaffected.
+- **Opt-in career venue packs (#122)** — higher-tier venue crowd media
+  (`club`, `arena`) is no longer bundled; the app downloads each pack on demand
+  from its release when you reach the venue (sha256-verified), keeping the
+  starter `bar` venue bundled for offline play. Trims ~678 MB from the desktop
+  download; an unpublished pack shows "coming soon" and plays on the standard
+  stage until its release lands.
 - **Session-sync relay WebSocket — `/ws/sync/{session_id}` (#1030).** A
   deliberately dumb JSON fan-out room: a text frame received from one client is
   forwarded verbatim to every other client on the same session id; the server
@@ -303,6 +365,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only to a single squashed "Clean release snapshot" commit with no
   surviving design rationale — treated here as an inaccurate description of
   a bug, not a protected feature, and updated accordingly.
+- **Count-in follows the song's meter and its pickup measure.** The count-in
+  (loop wrap, section practice, and the "Countdown before song" setting) always
+  clicked exactly four beats, so a 3/4 song was counted in 4/4, and a song
+  opening with a pickup (anacrusis) had the pickup enter where the downbeat
+  belonged — putting the player a beat ahead for the whole song. The bar length
+  now comes from the `song_timeline` beats already on the highway
+  (`measure >= 0` marks downbeats; no new plumbing, since the `time_signatures`
+  map is streamed to plugins rather than stored in the frontend), and a first
+  bar shorter than that meter shortens the count by its length: a 1-beat pickup
+  in 4/4 counts "1 2 3" and the music enters on 4. Songs without beats — pre-chart,
+  minigames, synthetic highways — still get four.
 - **GP8 asset resolution honours the directory the registry named.**
   `<EmbeddedFilePath>` is matched on filename stem so a format variant of the
   same recording can win (an `.ogg` beside the declared `.mp3` is copied out
