@@ -1,4 +1,10 @@
-"""Regression coverage for sloppak load failures in the highway websocket."""
+"""Regression coverage for sloppak load failures in the highway websocket.
+
+load_song() never returns None on failure — it always raises. The handler
+must catch that and translate it to a clean, generic error message rather
+than leaking the raw exception text (which can include filesystem paths)
+to the client, and must never dereference the partially-loaded result.
+"""
 
 import asyncio
 import importlib
@@ -45,7 +51,13 @@ def server(tmp_path, monkeypatch):
     sys.modules.pop("server", None)
 
 
-def test_sloppak_loader_returning_none_sends_error_without_touching_stems(
+def _raise_load_failure(*a, **kw):
+    # The real load_song() never returns None on failure — every failure
+    # path raises instead (bad zip, missing/corrupt manifest, ...).
+    raise ValueError("bad zip: not a sloppak")
+
+
+def test_sloppak_loader_raising_sends_clean_error_without_touching_stems(
     server, monkeypatch
 ):
     _server, dlc, cache = server
@@ -55,7 +67,7 @@ def test_sloppak_loader_returning_none_sends_error_without_touching_stems(
     from routers import ws_highway
 
     monkeypatch.setattr(appstate, "sloppak_cache_dir", cache)
-    monkeypatch.setattr(ws_highway.sloppak_mod, "load_song", lambda *a, **kw: None)
+    monkeypatch.setattr(ws_highway.sloppak_mod, "load_song", _raise_load_failure)
 
     ws = _CapturingWS()
     asyncio.run(ws_highway.highway_ws(ws, "broken.feedpak", arrangement=0))

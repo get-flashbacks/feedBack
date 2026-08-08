@@ -47,6 +47,7 @@ import notation as notation_mod
 import loosefolder as loosefolder_mod
 from metadata_db import _arr_smart_sort_key
 from dlc_paths import _get_dlc_dir, _resolve_dlc_path
+from safe_xml import safe_parse
 
 import appstate
 
@@ -208,11 +209,18 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
             _ctx = contextvars.copy_context()
             if is_slop:
                 appstate.sloppak_cache_dir.mkdir(parents=True, exist_ok=True)
-                loaded_slop = await loop.run_in_executor(
-                    None,
-                    lambda: _ctx.run(sloppak_mod.load_song, filename, dlc, appstate.sloppak_cache_dir),
-                )
-                if loaded_slop is None:
+                try:
+                    loaded_slop = await loop.run_in_executor(
+                        None,
+                        lambda: _ctx.run(sloppak_mod.load_song, filename, dlc, appstate.sloppak_cache_dir),
+                    )
+                except Exception:
+                    # load_song() never returns None on failure — it raises
+                    # (bad zip, missing/corrupt manifest, ...). Catch that
+                    # here so the client gets a clean, generic message
+                    # instead of the outer handler's raw str(e), which can
+                    # leak filesystem paths.
+                    log.exception("sloppak load failed for %s", filename)
                     _keepalive_active = False
                     keepalive_task.cancel()
                     await websocket.send_json({"error": "Failed to load sloppak"})
@@ -751,7 +759,7 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
         else:
             for xml_path in sorted(_xml_walk("*.xml")):
                 try:
-                    root = ET.parse(xml_path).getroot()
+                    root = safe_parse(xml_path).getroot()
                     if root.tag == "vocals":
                         # An empty <vocals/> shell would otherwise
                         # short-circuit later XML files, so only stop
@@ -917,7 +925,7 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
             tone_base = ""  # <tonebase> of the preferred arrangement XML
             for xml_path in sorted_xml:
                 try:
-                    root = ET.parse(xml_path).getroot()
+                    root = safe_parse(xml_path).getroot()
                     if root.tag != "song":
                         continue
                     if _suppress_fallback and _xml_rank(xml_path) == 2:
