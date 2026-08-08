@@ -1358,9 +1358,20 @@
         return Number.isFinite(first) ? first : null;
     }
 
+    // Stable default for "no anchor yet applies" — same shape core's
+    // static/highway.js getAnchorAt() falls back to. A single shared
+    // instance (not a fresh literal per call) so the reference-equality
+    // check at the sustain-rail clip site (search getChartAnchorAt !==)
+    // still sees "same anchor" across two calls that both land before
+    // the first real anchor.
+    const DEFAULT_CHART_ANCHOR = { fret: 1, width: 4 };
+
     // Last arrangement <anchor> at or before chart time `t` (sorted by .time).
-    // Mirrors static/highway.js getAnchorAt — until t reaches the first anchor’s
-    // time, the first anchor still defines fret/width.
+    // Mirrors static/highway.js getAnchorAt(): before t reaches the first
+    // anchor's time, DEFAULT_CHART_ANCHOR applies rather than the first
+    // anchor jumping the gun — a chart whose anchor list starts minutes in
+    // (data gap) used to zoom the lane/lookahead/fret-row to that far-later
+    // anchor's fret window during the intro.
     // Binary search: this is called inside per-frame loops (lane slicing,
     // lookahead sampling, marker spawning), so the linear scan was O(samples *
     // numAnchors) on dense charts.
@@ -1372,7 +1383,7 @@
             if (anchorArr[mid].time <= t) lo = mid + 1;
             else hi = mid;
         }
-        return lo === 0 ? anchorArr[0] : anchorArr[lo - 1];
+        return lo === 0 ? DEFAULT_CHART_ANCHOR : anchorArr[lo - 1];
     }
 
     /** @returns {{ dMin: number, dMax: number } | null} */
