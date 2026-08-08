@@ -355,6 +355,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   engine (`app.js`, `highway.js`, `playSong`, `showScreen`, the capability registry).
 
 ### Fixed
+- **highway_3d chord diagram no longer mirrors on Invert.** The top-left chord
+  diagram overlay (`drawChordDiagram()`) was flipping its column order
+  (high-e/low-E swapped) whenever the highway's Invert toggle was on, passed
+  through as `inverted: _invertedCached` at both call sites. The diagram's
+  orientation should be fixed regardless of that toggle, so both call sites
+  now pass `inverted: false`. Note: `plugins/highway_3d/CLAUDE.md` had
+  documented the mirroring as this overlay's contract, but that line traces
+  only to a single squashed "Clean release snapshot" commit with no
+  surviving design rationale — treated here as an inaccurate description of
+  a bug, not a protected feature, and updated accordingly.
 - **Count-in follows the song's meter and its pickup measure.** The count-in
   (loop wrap, section practice, and the "Countdown before song" setting) always
   clicked exactly four beats, so a 3/4 song was counted in 4/4, and a song

@@ -16544,7 +16544,9 @@
                                 ? Math.min(1.0, Math.max(0, (bundle.currentTime - _diagPrev.t) / DIAG_ENTRANCE_S))
                                 : 1.0,
                             canvasW: lyricsCanvas.width, canvasH: lyricsCanvas.height,
-                            inverted: _invertedCached,
+                            // Chord diagram orientation is fixed regardless of the
+                            // highway's own Invert toggle.
+                            inverted: false,
                             sizeSlider: chordDiagramSize, position: chordDiagramPosition,
                             nStr: _diagPrev.nStr ?? nStr,
                             lyricsBottom,
@@ -16558,7 +16560,9 @@
                             opacity: Math.max(0, 1 + (_diagChord.t - bundle.currentTime) / DIAG_LINGER_S),
                             entranceT: _diagEntranceT,
                             canvasW: lyricsCanvas.width, canvasH: lyricsCanvas.height,
-                            inverted: _invertedCached,
+                            // Chord diagram orientation is fixed regardless of the
+                            // highway's own Invert toggle.
+                            inverted: false,
                             sizeSlider: chordDiagramSize, position: chordDiagramPosition,
                             nStr: _diagChord.nStr ?? nStr,
                             lyricsBottom,
@@ -16662,6 +16666,12 @@
     // arrangements that merely contain these as substrings (e.g. a
     // "BasslineKeys" arrangement would otherwise match `bass`).
     window.feedBackViz_highway_3d.matchesArrangement = function (songInfo) {
+        // Manifest `type: keys` is authoritative and independent of the
+        // display name — a keys arrangement literally named "Combo" (GP
+        // import quirk) would otherwise match the /combo/ keyword below
+        // and steal the song from the piano/keys viz. Yield whenever the
+        // active arrangement's real type says keys.
+        if (songInfo && songInfo.arrangement_type === 'keys') return false;
         const arr = (songInfo && songInfo.arrangement) || '';
         return /\b(?:lead|rhythm|bass|combo|guitar)\b/i.test(arr);
     };
