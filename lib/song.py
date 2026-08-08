@@ -1414,12 +1414,17 @@ def parse_arrangement(xml_path: str) -> Arrangement:
             if pid >= len(phrase_list):
                 continue
             max_diff = _int(phrase_list[pid], "maxDifficulty")
-            # First iteration's window reaches down to -inf (not its own
-            # authored time, typically 0.0) so a negative-time seed anchor
-            # or other pre-zero event isn't bisect-sliced out. Only the
-            # first iteration needs this — later ones still start exactly
-            # at their own time so windows don't overlap.
-            t_start = float("-inf") if i == 0 else _float(it, "time")
+            # t_start stays finite — it lands in Phrase.start_time, which
+            # is JSON-serialized over the WebSocket, and JSON has no
+            # Infinity literal (see _collect_best_level_fallback above).
+            # The bisect floor used for COLLECTION is separate: the first
+            # iteration's slice_lo reaches down to -inf so a negative-time
+            # seed anchor or other pre-zero event isn't sliced out, while
+            # Phrase.start_time keeps the iteration's own authored time.
+            # Later iterations don't need widening — they still start
+            # exactly at their own time so windows don't overlap.
+            t_start = _float(it, "time")
+            slice_lo = float("-inf") if i == 0 else t_start
             t_end = _float(iterations[i + 1], "time") if i + 1 < len(iterations) else song_end
 
             # Build a PhraseLevel for every difficulty tier the author
@@ -1434,7 +1439,7 @@ def parse_arrangement(xml_path: str) -> Arrangement:
             for diff in sorted(parsed_levels.keys()):
                 if diff > max_diff:
                     continue
-                slc = _extract_level_slice(parsed_levels[diff], t_start, t_end)
+                slc = _extract_level_slice(parsed_levels[diff], slice_lo, t_end)
                 slices_by_diff[diff] = slc
                 lv_notes, lv_chords, lv_anchors, lv_hand_shapes = slc
                 phrase_levels.append(PhraseLevel(

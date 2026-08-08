@@ -6,6 +6,7 @@ fallback paths for missing or unusable phrase metadata) and the
 <arrangementProperties> flag parsing for smart naming.
 """
 
+import json
 import math
 
 from song import parse_arrangement
@@ -781,6 +782,17 @@ def test_parse_first_phrase_iteration_keeps_negative_time_anchor(tmp_path):
     assert [n.time for n in second_level.notes] == [2.0]
     # Flat max-mastery merge carries both windows' events through too.
     assert [a.time for a in arr.anchors] == [-2.0, 1.5]
+    # Phrase.start_time must stay the iteration's own finite authored time
+    # (0.0 here) — NOT the -inf collection floor. -inf would serialize to
+    # the invalid JSON token -Infinity over the phrases WebSocket message,
+    # which JS JSON.parse rejects, dropping the whole message (mastery
+    # slider disabled / partial ladder on longer songs).
+    assert math.isfinite(arr.phrases[0].start_time)
+    assert arr.phrases[0].start_time == 0.0
+
+    from song import phrase_to_wire
+    wire = phrase_to_wire(arr.phrases[0])
+    assert json.loads(json.dumps(wire, allow_nan=False)) == wire
 
 
 def test_parse_best_level_fallback_keeps_negative_time_anchor(tmp_path):
