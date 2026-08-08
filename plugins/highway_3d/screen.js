@@ -12653,7 +12653,7 @@
                                 let anyState = false;  // true if any constituent had a non-null state this scan
                                 for (const cn of chordNotes) {
                                     let cnState = null;
-                                    try { cnState = _ndGetNoteState(cn, ch.t); } catch (e) { cnState = null; }
+                                    try { cnState = _ndGetNoteState(cn, ch.t); } catch { cnState = null; }
                                     const st = (cnState && typeof cnState === 'object') ? cnState.state : cnState;
                                     if (st === 'hit' || st === 'active') {
                                         anyState = true;
