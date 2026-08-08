@@ -412,12 +412,18 @@ function createHighway() {
         // anchor ladder pairs with the note ladder.
         const src = hwState._xfAnchors !== null ? hwState._xfAnchors
             : hwState._filteredAnchors !== null ? hwState._filteredAnchors : hwState.anchors;
-        let a = src[0] || { fret: 1, width: 4 };
+        // No anchor yet applies to `t` (empty list, or every anchor is
+        // still in the future) — use a sane default instead of falling
+        // through to src[0], which could be an anchor far later in the
+        // song (e.g. a data gap leaves the first anchor at 3+ minutes in,
+        // wrongly highlighting frets 6-10 during a low-fret intro).
+        if (!src.length || src[0].time > t) return { fret: 1, width: 4 };
+        let current = src[0];
         for (const anc of src) {
             if (anc.time > t) break;
-            a = anc;
+            current = anc;
         }
-        return a;
+        return current;
     }
 
     function getMaxFretInWindow(t) {
@@ -2281,13 +2287,13 @@ function createHighway() {
                                 if (msg.arrangements) {
                                     const sel = document.getElementById('arr-select');
                                     // Server-echoed naming_mode preferred; see HUD branch above.
-                                    let namingMode = msg.naming_mode;
-                                    if (namingMode !== 'smart' && namingMode !== 'legacy') {
-                                        try { namingMode = localStorage.getItem('arrangementNamingMode') === 'legacy' ? 'legacy' : 'smart'; } catch (_) { namingMode = 'smart'; }
+                                    let arrNamingMode = msg.naming_mode;
+                                    if (arrNamingMode !== 'smart' && arrNamingMode !== 'legacy') {
+                                        try { arrNamingMode = localStorage.getItem('arrangementNamingMode') === 'legacy' ? 'legacy' : 'smart'; } catch (_) { arrNamingMode = 'smart'; }
                                     }
                                     sel.textContent = '';
                                     for (const a of msg.arrangements) {
-                                        const displayName = (namingMode === 'smart' && a.smart_name) ? a.smart_name : a.name;
+                                        const displayName = (arrNamingMode === 'smart' && a.smart_name) ? a.smart_name : a.name;
                                         // Keep the note-count suffix in both modes — useful for
                                         // disambiguating sibling arrangements (e.g. two "Alt. Lead"s).
                                         const label = `${displayName} (${a.notes})`;

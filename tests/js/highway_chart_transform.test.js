@@ -196,6 +196,30 @@ test('unordered provider timelines are copied and normalized for searches and an
     assert.deepEqual(hwState._xfChordsAll.map(ch => ch.t), [1, 3], 'unfiltered chords still fall back');
 });
 
+test('getAnchorAt falls back to a sane default when every anchor is still in the future', () => {
+    // Regression test: a data gap (e.g. an arrangement whose anchor list
+    // starts minutes into the song) used to fall through to src[0] — the
+    // first REAL anchor — even when playback hadn't reached it yet,
+    // wrongly highlighting its fret window during the intro.
+    const src = fs.readFileSync(highwayJs, 'utf8');
+    const snippet = extractBlock(src, 'function getAnchorAt(t)');
+    const hwState = {
+        _xfAnchors: null,
+        _filteredAnchors: null,
+        anchors: [{ time: 227, fret: 6, width: 4 }],
+    };
+    const helpers = new Function('hwState', `
+        ${snippet}
+        return { getAnchorAt };
+    `)(hwState);
+
+    assert.deepEqual(helpers.getAnchorAt(0.3), { fret: 1, width: 4 }, 'before the only anchor');
+    hwState.anchors = [];
+    assert.deepEqual(helpers.getAnchorAt(0), { fret: 1, width: 4 }, 'empty anchor list');
+    hwState.anchors = [{ time: 227, fret: 6, width: 4 }];
+    assert.deepEqual(helpers.getAnchorAt(227), { time: 227, fret: 6, width: 4 }, 'once t reaches it, applies normally');
+});
+
 test('provider inputs and staged outputs are isolated from provider mutation', () => {
     const src = fs.readFileSync(highwayJs, 'utf8');
     const snippets = [
