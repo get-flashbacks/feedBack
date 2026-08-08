@@ -412,7 +412,13 @@ function createHighway() {
         // anchor ladder pairs with the note ladder.
         const src = hwState._xfAnchors !== null ? hwState._xfAnchors
             : hwState._filteredAnchors !== null ? hwState._filteredAnchors : hwState.anchors;
-        let a = src[0] || { fret: 1, width: 4 };
+        // No anchor yet applies to `t` (empty list, or every anchor is
+        // still in the future) — use a sane default instead of falling
+        // through to src[0], which could be an anchor far later in the
+        // song (e.g. a data gap leaves the first anchor at 3+ minutes in,
+        // wrongly highlighting frets 6-10 during a low-fret intro).
+        if (!src.length || src[0].time > t) return { fret: 1, width: 4 };
+        let a = src[0];
         for (const anc of src) {
             if (anc.time > t) break;
             a = anc;

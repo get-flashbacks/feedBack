@@ -1359,7 +1359,11 @@ def parse_arrangement(xml_path: str) -> Arrangement:
             parsed_levels.values(),
             key=lambda pl: len(pl["notes"]) + len(pl["chords"]),
         )
-        _collect_from_parsed(best, 0.0, float("inf"))
+        # Floor is -inf, not 0.0: a negative `audio_offset` (autosync
+        # pre-roll, GP8 embedded lead-in) shifts early events — notably
+        # the seed anchor, written at time=audio_offset — before zero.
+        # A 0.0 floor silently bisect-slices those out of the flat merge.
+        _collect_from_parsed(best, float("-inf"), float("inf"))
 
     # Per-phrase difficulty data for the master-difficulty slider
     # (feedBack#48). Only populated when the XML has multiple levels AND
@@ -1369,7 +1373,8 @@ def parse_arrangement(xml_path: str) -> Arrangement:
 
     # If there's only one level, use it directly (no per-phrase merge needed)
     if len(parsed_levels) == 1:
-        _collect_from_parsed(next(iter(parsed_levels.values())), 0.0, float("inf"))
+        # See _collect_best_level_fallback above re: -inf floor.
+        _collect_from_parsed(next(iter(parsed_levels.values())), float("-inf"), float("inf"))
     # Merge per-phrase if we have phrase data and multiple levels
     elif phrases_el is not None and phrase_iters_el is not None and parsed_levels:
         phrase_list = phrases_el.findall("phrase")
