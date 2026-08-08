@@ -1414,7 +1414,12 @@ def parse_arrangement(xml_path: str) -> Arrangement:
             if pid >= len(phrase_list):
                 continue
             max_diff = _int(phrase_list[pid], "maxDifficulty")
-            t_start = _float(it, "time")
+            # First iteration's window reaches down to -inf (not its own
+            # authored time, typically 0.0) so a negative-time seed anchor
+            # or other pre-zero event isn't bisect-sliced out. Only the
+            # first iteration needs this — later ones still start exactly
+            # at their own time so windows don't overlap.
+            t_start = float("-inf") if i == 0 else _float(it, "time")
             t_end = _float(iterations[i + 1], "time") if i + 1 < len(iterations) else song_end
 
             # Build a PhraseLevel for every difficulty tier the author
