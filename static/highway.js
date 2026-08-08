@@ -418,12 +418,12 @@ function createHighway() {
         // song (e.g. a data gap leaves the first anchor at 3+ minutes in,
         // wrongly highlighting frets 6-10 during a low-fret intro).
         if (!src.length || src[0].time > t) return { fret: 1, width: 4 };
-        let a = src[0];
+        let current = src[0];
         for (const anc of src) {
             if (anc.time > t) break;
-            a = anc;
+            current = anc;
         }
-        return a;
+        return current;
     }
 
     function getMaxFretInWindow(t) {
