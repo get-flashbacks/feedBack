@@ -2287,13 +2287,13 @@ function createHighway() {
                                 if (msg.arrangements) {
                                     const sel = document.getElementById('arr-select');
                                     // Server-echoed naming_mode preferred; see HUD branch above.
-                                    let namingMode = msg.naming_mode;
-                                    if (namingMode !== 'smart' && namingMode !== 'legacy') {
-                                        try { namingMode = localStorage.getItem('arrangementNamingMode') === 'legacy' ? 'legacy' : 'smart'; } catch (_) { namingMode = 'smart'; }
+                                    let arrNamingMode = msg.naming_mode;
+                                    if (arrNamingMode !== 'smart' && arrNamingMode !== 'legacy') {
+                                        try { arrNamingMode = localStorage.getItem('arrangementNamingMode') === 'legacy' ? 'legacy' : 'smart'; } catch (_) { arrNamingMode = 'smart'; }
                                     }
                                     sel.textContent = '';
                                     for (const a of msg.arrangements) {
-                                        const displayName = (namingMode === 'smart' && a.smart_name) ? a.smart_name : a.name;
+                                        const displayName = (arrNamingMode === 'smart' && a.smart_name) ? a.smart_name : a.name;
                                         // Keep the note-count suffix in both modes — useful for
                                         // disambiguating sibling arrangements (e.g. two "Alt. Lead"s).
                                         const label = `${displayName} (${a.notes})`;

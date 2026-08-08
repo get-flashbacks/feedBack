@@ -6233,11 +6233,11 @@
             const _PB_REPORT_MS = 5000;
             let _pbReportStart = 0;
             let _pbFrameCount = 0;
-            pbBeg = function pbBeg(idx) { _pbStart[idx] = performance.now(); };
-            pbEnd = function pbEnd(idx) {
+            pbBeg = function (idx) { _pbStart[idx] = performance.now(); };
+            pbEnd = function (idx) {
                 _pbAcc[idx].push(performance.now() - _pbStart[idx]);
             };
-            pbReportTick = function pbReportTick() {
+            pbReportTick = function () {
                 const now = performance.now();
                 if (_pbReportStart === 0) {
                     // First call: discard the sample(s) that already
@@ -6344,7 +6344,7 @@
                 inverted = false,
                 sizeSlider = 0.5,
                 position = 'tl',
-                nStr = 6,
+                nStr: diagNStr = 6,
                 lyricsBottom = 0,
                 stackOffset = 0,
             } = opts;
@@ -6352,7 +6352,7 @@
             // Responsive sizing — CELL derived from panel height + user slider.
             // COLS is the resolved string count from the caller (via resolveStringCount)
             // so bass (4), extended (7/8) arrangements render correctly.
-            const COLS = nStr, ROWS = 4;
+            const COLS = diagNStr, ROWS = 4;
             // Minimum column span required for PATH B (bracket extension / detection).
             // Math.min(COLS-1, 4) scales with string count:
             //   4-string bass → 3  (max possible span, so 2-4-4-2 shapes qualify)
@@ -6679,8 +6679,8 @@
             if (entranceT < 1.0) {
                 return drawChordDiagram(ctx, opts) || 0;
             }
-            const { name, frets, nStr, inverted, sizeSlider, position, lyricsBottom = 0, stackOffset = 0 } = opts;
-            const key = name + '|' + (frets || []).join(',') + '|' + nStr + '|' +
+            const { name, frets, nStr: diagNStr, inverted, sizeSlider, position, lyricsBottom = 0, stackOffset = 0 } = opts;
+            const key = name + '|' + (frets || []).join(',') + '|' + diagNStr + '|' +
                         (inverted ? 1 : 0) + '|' + sizeSlider + '|' + position + '|' +
                         canvasW + '|' + canvasH + '|' + lyricsBottom + '|' + stackOffset;
             let entry = _diagRenderCache.get(key);
@@ -12652,9 +12652,9 @@
                                 let anyMiss = false;
                                 let anyState = false;  // true if any constituent had a non-null state this scan
                                 for (const cn of chordNotes) {
-                                    let cs = null;
-                                    try { cs = _ndGetNoteState(cn, ch.t); } catch (e) { cs = null; }
-                                    const st = (cs && typeof cs === 'object') ? cs.state : cs;
+                                    let cnState = null;
+                                    try { cnState = _ndGetNoteState(cn, ch.t); } catch (e) { cnState = null; }
+                                    const st = (cnState && typeof cnState === 'object') ? cnState.state : cnState;
                                     if (st === 'hit' || st === 'active') {
                                         anyState = true;
                                     } else if (st === 'miss') {
@@ -13004,11 +13004,11 @@
 
                             if (is3dBarre && chDt <= 0) {
                                 const bx = xFretMid(bFret);
-                                const yTop = Math.max(sY(barreMinStr3d), sY(barreMaxStr3d));
-                                const yBot = Math.min(sY(barreMinStr3d), sY(barreMaxStr3d));
-                                const lineH = yTop - yBot;
+                                const barreYTop = Math.max(sY(barreMinStr3d), sY(barreMaxStr3d));
+                                const barreYBot = Math.min(sY(barreMinStr3d), sY(barreMaxStr3d));
+                                const lineH = barreYTop - barreYBot;
                                 const bl = pBarreLine.get();
-                                bl.position.set(bx, (yTop + yBot) / 2, 0.05 * K);
+                                bl.position.set(bx, (barreYTop + barreYBot) / 2, 0.05 * K);
                                 bl.scale.set(0.5 * K, lineH, 0.5 * K);
                                 bl.material.opacity = 0.8 * chordTailMul;
                             }
