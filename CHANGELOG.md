@@ -47,6 +47,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Defense-in-depth: this would have limited the blast radius of the retune
   XSS above (and any future/residual one) even before that fix landed.
 
+### Fixed
+
+- **A sloppak load failure at the highway websocket now always surfaces a
+  clean `Failed to load sloppak` error instead of a raw exception message.**
+  `sloppak_mod.load_song()` never returns `None` — every failure path (bad
+  zip, missing/corrupt manifest, ...) raises instead — so a `None` guard
+  after the load call was unreachable dead code; real failures were already
+  being caught by the handler's outer exception handler and reported as a
+  raw `{"error": str(e)}`, which can leak implementation details (e.g.
+  filesystem paths) to the client. The load call is now wrapped directly so
+  its exception is caught right there and translated to the same clean,
+  generic message, before arrangement/stem access is ever reached.
+
 ### Added
 - Library card actions can now provide per-song label and icon callbacks, so
   plugins can render dynamic card badges without DOM patching.
