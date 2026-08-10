@@ -13,6 +13,7 @@
  *   register(spec) -> unregister()    spec: { id, pluginId, label, icon?,
  *       placement?('menu'|'inline'|'overlay'), order?, destructive?,
  *       applies?(song)->bool, enabled?(song)->bool, run(song, ctx) }
+ *       label/icon may be strings or (song)->string functions.
  *   list(song) -> [actionSummary]      applicable actions, sorted
  *   run(id, song, ctx) -> Promise<{ ok, outcome, result?|error? }>
  *   snapshot() -> redaction-safe registry snapshot
@@ -39,8 +40,8 @@
         return {
             id: String(spec.id),
             pluginId: String(spec.pluginId || 'unknown'),
-            label: String(spec.label || spec.id),
-            icon: spec.icon || '',
+            label: typeof spec.label === 'function' ? spec.label : () => String(spec.label || spec.id),
+            icon: typeof spec.icon === 'function' ? spec.icon : () => String(spec.icon || ''),
             placement: PLACEMENTS.includes(spec.placement) ? spec.placement : 'menu',
             order: Number.isFinite(spec.order) ? spec.order : 100,
             destructive: !!spec.destructive,
@@ -87,7 +88,11 @@
             if (!applicable) continue;
             let enabled = true;
             try { enabled = a.enabled(song) !== false; } catch (e) { enabled = true; }
-            out.push({ id: a.id, pluginId: a.pluginId, label: a.label, icon: a.icon, placement: a.placement, order: a.order, destructive: a.destructive, enabled });
+            let label = a.id;
+            try { label = String(a.label(song) || a.id); } catch (e) { label = a.id; }
+            let icon = '';
+            try { icon = String(a.icon(song) || ''); } catch (e) { icon = ''; }
+            out.push({ id: a.id, pluginId: a.pluginId, label, icon, placement: a.placement, order: a.order, destructive: a.destructive, enabled });
         }
         out.sort((x, y) => (x.order - y.order) || x.label.localeCompare(y.label));
         return out;
