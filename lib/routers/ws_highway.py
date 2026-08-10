@@ -47,6 +47,7 @@ import notation as notation_mod
 import loosefolder as loosefolder_mod
 from metadata_db import _arr_smart_sort_key
 from dlc_paths import _get_dlc_dir, _resolve_dlc_path
+from safe_xml import safe_parse
 
 import appstate
 
@@ -372,7 +373,7 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
         else:
             audio_id = Path(filename).stem.replace(" ", "_")
 
-        if is_slop:
+        if is_slop and loaded_slop is not None:
             # Stems are served via the sloppak file endpoint; the first stem
             # (or explicit default) is the core <audio> source. The stems
             # plugin replaces it with a mixed graph when active.
@@ -384,7 +385,7 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
                     {"id": s["id"], "url": url, "default": s["default"],
                      **{k: s[k] for k in ("name", "description") if k in s}})
             # Full-mix URL (served by the same /api/sloppak/.../file/ endpoint).
-            if loaded_slop is not None and loaded_slop.full_mix:
+            if loaded_slop.full_mix:
                 full_mix_url = (
                     f"/api/sloppak/{q_fn}/file/{quote(loaded_slop.full_mix)}"
                 )
@@ -405,6 +406,9 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
                 audio_url = full_mix_url
             else:
                 audio_error = "This sloppak has no playable stems."
+        elif is_slop:
+            # Sloppak failed to load — loaded_slop is None
+            audio_error = "Failed to load sloppak"
         else:
             appstate.audio_cache_dir.mkdir(parents=True, exist_ok=True)
             # Check if audio already cached (writable cache dir or legacy static dir)
@@ -750,7 +754,7 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
         else:
             for xml_path in sorted(_xml_walk("*.xml")):
                 try:
-                    root = ET.parse(xml_path).getroot()
+                    root = safe_parse(xml_path).getroot()
                     if root.tag == "vocals":
                         # An empty <vocals/> shell would otherwise
                         # short-circuit later XML files, so only stop
@@ -782,20 +786,29 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
         # (Arrangement.tones, populated by the converter), so read it straight
         # off `arr` rather than walking for XML that doesn't exist.
         if is_slop:
-            # `sloppak_tone_changes` builds the (base, sorted changes) pair
-            # from `Arrangement.tones`, skipping non-string names and
-            # non-finite/non-numeric times — unit-tested in test_tones.py.
+            # `sloppak_tone_changes` builds the (base, base_rig, sorted
+            # changes) triple from `Arrangement.tones`, skipping non-string
+            # names, non-finite/non-numeric times, and unusable rig ids —
+            # unit-tested in test_tones.py.
             from tones import sloppak_tone_changes
-            base_name, tone_changes = sloppak_tone_changes(getattr(arr, "tones", None))
+            base_name, base_rig, tone_changes = sloppak_tone_changes(
+                getattr(arr, "tones", None)
+            )
             # Send when there's a base tone OR timed changes — a single-tone
             # arrangement has a base but no switches, and the highway should
             # still be able to show the initial tone.
             if tone_changes or base_name:
-                await websocket.send_json({
+                payload = {
                     "type": "tone_changes",
                     "base": base_name,
                     "data": tone_changes,
-                })
+                }
+                # `base_rig` is additive (feedpak-spec §6.9) — omitted entirely
+                # when the chart binds no rig, so consumers that predate the rig
+                # model see the exact payload they always did.
+                if base_rig:
+                    payload["base_rig"] = base_rig
+                await websocket.send_json(payload)
         else:
             xml_paths = sorted(_xml_walk("*.xml"))
 
@@ -907,7 +920,7 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
             tone_base = ""  # <tonebase> of the preferred arrangement XML
             for xml_path in sorted_xml:
                 try:
-                    root = ET.parse(xml_path).getroot()
+                    root = safe_parse(xml_path).getroot()
                     if root.tag != "song":
                         continue
                     if _suppress_fallback and _xml_rank(xml_path) == 2:
