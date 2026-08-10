@@ -1359,7 +1359,11 @@ def parse_arrangement(xml_path: str) -> Arrangement:
             parsed_levels.values(),
             key=lambda pl: len(pl["notes"]) + len(pl["chords"]),
         )
-        _collect_from_parsed(best, 0.0, float("inf"))
+        # Floor is -inf, not 0.0: a negative `audio_offset` (autosync
+        # pre-roll, GP8 embedded lead-in) shifts early events — notably
+        # the seed anchor, written at time=audio_offset — before zero.
+        # A 0.0 floor silently bisect-slices those out of the flat merge.
+        _collect_from_parsed(best, float("-inf"), float("inf"))
 
     # Per-phrase difficulty data for the master-difficulty slider
     # (feedBack#48). Only populated when the XML has multiple levels AND
@@ -1369,7 +1373,8 @@ def parse_arrangement(xml_path: str) -> Arrangement:
 
     # If there's only one level, use it directly (no per-phrase merge needed)
     if len(parsed_levels) == 1:
-        _collect_from_parsed(next(iter(parsed_levels.values())), 0.0, float("inf"))
+        # See _collect_best_level_fallback above re: -inf floor.
+        _collect_from_parsed(next(iter(parsed_levels.values())), float("-inf"), float("inf"))
     # Merge per-phrase if we have phrase data and multiple levels
     elif phrases_el is not None and phrase_iters_el is not None and parsed_levels:
         phrase_list = phrases_el.findall("phrase")
@@ -1409,7 +1414,17 @@ def parse_arrangement(xml_path: str) -> Arrangement:
             if pid >= len(phrase_list):
                 continue
             max_diff = _int(phrase_list[pid], "maxDifficulty")
+            # t_start stays finite — it lands in Phrase.start_time, which
+            # is JSON-serialized over the WebSocket, and JSON has no
+            # Infinity literal (see _collect_best_level_fallback above).
+            # The bisect floor used for COLLECTION is separate: the first
+            # iteration's slice_lo reaches down to -inf so a negative-time
+            # seed anchor or other pre-zero event isn't sliced out, while
+            # Phrase.start_time keeps the iteration's own authored time.
+            # Later iterations don't need widening — they still start
+            # exactly at their own time so windows don't overlap.
             t_start = _float(it, "time")
+            slice_lo = float("-inf") if i == 0 else t_start
             t_end = _float(iterations[i + 1], "time") if i + 1 < len(iterations) else song_end
 
             # Build a PhraseLevel for every difficulty tier the author
@@ -1424,7 +1439,7 @@ def parse_arrangement(xml_path: str) -> Arrangement:
             for diff in sorted(parsed_levels.keys()):
                 if diff > max_diff:
                     continue
-                slc = _extract_level_slice(parsed_levels[diff], t_start, t_end)
+                slc = _extract_level_slice(parsed_levels[diff], slice_lo, t_end)
                 slices_by_diff[diff] = slc
                 lv_notes, lv_chords, lv_anchors, lv_hand_shapes = slc
                 phrase_levels.append(PhraseLevel(

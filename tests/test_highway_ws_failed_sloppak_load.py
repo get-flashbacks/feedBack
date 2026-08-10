@@ -26,7 +26,8 @@ class _CapturingWS:
     async def send_json(self, data):
         self.messages.append(data)
 
-    async def receive_text(self):
+    @staticmethod
+    async def receive_text():
         await asyncio.sleep(0)
         return ""
 

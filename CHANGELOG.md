@@ -59,6 +59,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   filesystem paths) to the client. The load call is now wrapped directly so
   its exception is caught right there and translated to the same clean,
   generic message, before arrangement/stem access is ever reached.
+- **Chart events shifted before time zero by a negative `audio_offset` were
+  silently dropped.** `parse_arrangement()`'s flat-merge and per-phrase
+  paths clipped notes/chords/anchors to a lower bound of `0.0`; a negative
+  `audio_offset` (autosync compensating for audio pre-roll) shifts early
+  events — notably the seed anchor written at `time=audio_offset` — before
+  zero, and `bisect_left` silently sliced them out. Symptom: the fret-ruler
+  highlight fell back to a far-later anchor for the entire intro of the
+  affected arrangement. Floor is now `float('-inf')` in all three call
+  sites (single-level, best-level fallback, and the first phrase
+  iteration). Also hardened `getAnchorAt()` in `highway.js` to default to
+  `{fret: 1, width: 4}` whenever no anchor yet applies, rather than
+  falling through to a future anchor.
 
 ### Added
 - Library card actions can now provide per-song label and icon callbacks, so
