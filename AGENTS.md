@@ -838,3 +838,5 @@ fix(highway): correct fret position for 7-string arrangements
 ---
 
 Maintainer docs (release runbooks, pipeline internals, governance) live in the org-internal `.github-private` repository.
+
+​CLAUDE.md and AGENTS.md intentionally remain distinct. CLAUDE.md is an officially maintained repository file, while AGENTS.md serves as an unofficial reference created for personal workflow assistance. Maintaining this separation prevents unwanted churn on tracked upstream files.
