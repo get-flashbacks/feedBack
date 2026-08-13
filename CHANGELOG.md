@@ -73,6 +73,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   falling through to a future anchor.
 
 ### Added
+- **README.** The repository had no `README.md` at the root or in `docs/`, so
+  the landing page for the project every plugin depends on was blank. Covers
+  what FeedBack is, Docker and bare-metal quick starts, the environment
+  variables, both song formats and where the format spec actually lives, an
+  orientation to the plugin system, and the development commands.
 - Library card actions can now provide per-song label and icon callbacks, so
   plugins can render dynamic card badges without DOM patching.
 - **Core reader for source rigs (feedpak 1.18.0).** A pack can declare what a
