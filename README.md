@@ -5,8 +5,8 @@ notation — a scrolling note highway, standard notation, synced lyrics, and liv
 note detection from your instrument, all running on hardware you own.
 
 Charts come from importing Guitar Pro (GP3–GP8) or MusicXML, or from authoring
-in the built-in editor. FeedBack stores them in its own open, hand-editable
-package format.
+in the [Song Editor plugin](https://github.com/got-feedback/feedBack-plugin-editor).
+FeedBack stores them in its own open, hand-editable package format.
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 
@@ -46,7 +46,7 @@ Set these in `docker-compose.yml` or the environment:
 | Variable | Purpose |
 | --- | --- |
 | `DLC_DIR` | Song library folder inside the container (default `/dlc`) |
-| `CONFIG_DIR` | Persistent config + cache (default `/config`) |
+| `CONFIG_DIR` | Persistent config + cache. `/config` inside the container; on bare metal it defaults to `~/.local/share/feedback` |
 | `LOG_LEVEL` | `DEBUG` \| `INFO` \| `WARNING` \| `ERROR` (default `INFO`) |
 | `LOG_FORMAT` | `json` \| `text` (default `text`, coloured console) |
 | `APP_SOURCE_URL` | Overrides the Settings → About source link |
@@ -81,9 +81,12 @@ Plugins are the main extension point, and most of FeedBack's features are built
 as one. A plugin lives in `plugins/<id>/` with a `plugin.json` manifest and can
 contribute any mix of frontend screen, backend routes, and settings panel.
 
-> The directory name must equal the manifest's `id` exactly, case-sensitive. A
-> mismatch is a silent skip at discovery, and it is the most common reason a
-> plugin "won't load".
+> Name the directory to match the manifest's `id` (case-sensitive). That
+> pairing is what marks a plugin as a bundled core one for duplicate
+> resolution — it is *not* a discovery requirement, since the loader registers
+> plugins by their manifest `id` whatever the folder is called. A plugin that
+> genuinely won't load is usually missing `plugin.json`, has a manifest that
+> fails to parse, or has an `id` that is absent, empty, or not a string.
 
 A few of the things a plugin can do:
 
