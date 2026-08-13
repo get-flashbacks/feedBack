@@ -109,6 +109,10 @@ def test_demo_off_settings_post_not_blocked(tmp_path, monkeypatch):
     ("POST",   "/api/song/some-file/art/upload"),
     ("POST",   "/api/song/some-file/art/url"),
     ("DELETE", "/api/art/some-file/override"),
+    # lyrics_sync's manual editor: /save-lyrics writes hand-edited lyrics
+    # into a sloppak, same class of mutation as the plugin's existing
+    # align/save entries above it in _DEMO_BLOCKED.
+    ("POST",   "/api/plugins/lyrics_sync/save-lyrics"),
 ])
 def test_demo_on_blocked_routes_return_403(tmp_path, monkeypatch, method, path):
     server, client = _make_client(tmp_path, monkeypatch, demo=True)

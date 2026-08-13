@@ -187,6 +187,7 @@ _DEMO_BLOCKED: list[tuple[str, re.Pattern]] = [
     ("POST",   re.compile(r"^/api/plugins/lyrics_karaoke/save-lyrics$")),
     ("POST",   re.compile(r"^/api/plugins/lyrics_sync/align$")),
     ("POST",   re.compile(r"^/api/plugins/lyrics_sync/save$")),
+    ("POST",   re.compile(r"^/api/plugins/lyrics_sync/save-lyrics$")),
     ("POST",   re.compile(r"^/api/plugins/studio/sessions/[^/]+/extract-drums$")),
     ("POST",   re.compile(r"^/api/diagnostics/export$")),
     ("GET",    re.compile(r"^/api/diagnostics/preview$")),
