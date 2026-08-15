@@ -53,6 +53,36 @@ def test_hash_is_rename_survivable_and_normalized(server):
     assert h("Artist", "Song", "Album", None) == h("Artist", "Song", "Album", 0)
 
 
+def test_legacy_sha1_hashes_restamped_on_startup(tmp_path):
+    # The identity hash moved sha1 → sha256. Rows written with the old digest
+    # must be re-stamped on startup, or every stored hash would mismatch the
+    # freshly computed value and the whole library would re-queue for matching,
+    # silently dropping settled rows to unscanned. Pin that migration.
+    import hashlib
+    from metadata_db import MetadataDB
+
+    db = MetadataDB(tmp_path)
+    db.put("a.archive", 0, 0, {
+        "title": "Song", "artist": "Artist", "album": "Album", "duration": 100,
+        "arrangements": [{"name": "Lead", "index": 0}]})
+    with db._lock:
+        db.conn.execute(
+            "INSERT INTO song_enrichment (filename, content_hash, match_state, attempts) "
+            "VALUES (?, ?, 'matched', 3)",
+            ("a.archive", hashlib.sha1(b"legacy").hexdigest()))
+        db.conn.commit()
+    db.conn.close()
+
+    fresh = MetadataDB(tmp_path)  # re-open → the startup migration runs
+    try:
+        row = fresh.get_enrichment("a.archive")
+        assert row["content_hash"] == fresh.enrichment_content_hash("Artist", "Song", "Album", 100)
+        assert row["match_state"] == "matched"   # settled state preserved…
+        assert row["attempts"] == 3              # …and its failure backoff
+    finally:
+        fresh.conn.close()
+
+
 # ── queue selection ───────────────────────────────────────────────────────────
 
 def test_pending_covers_new_unscanned_and_changed(server):
