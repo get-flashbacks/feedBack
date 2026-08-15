@@ -304,11 +304,11 @@ def _maybe_start_drain():
 
 
 def _chart_key(chart):
-    """Stable per-chart counter key — a sha1 digest of the chart id. NOT the
+    """Stable per-chart counter key — a sha256 digest of the chart id. NOT the
     builtin hash(), whose str hashing is salted per process (PYTHONHASHSEED), so
     the same chart would land on a different counter after every restart and the
     Encore Feat could never accumulate across sessions."""
-    return "chart_plays:" + hashlib.sha1(str(chart).encode("utf-8")).hexdigest()[:16]
+    return "chart_plays:" + hashlib.sha256(str(chart).encode("utf-8")).hexdigest()[:16]
 
 
 def _read_counters(conn, pid):
