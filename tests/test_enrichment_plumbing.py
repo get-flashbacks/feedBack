@@ -69,7 +69,7 @@ def test_legacy_sha1_hashes_restamped_on_startup(tmp_path):
         db.conn.execute(
             "INSERT INTO song_enrichment (filename, content_hash, match_state, attempts) "
             "VALUES (?, ?, 'matched', 3)",
-            ("a.archive", hashlib.sha1(b"legacy").hexdigest()))
+            ("a.archive", hashlib.sha1(b"legacy").hexdigest()))  # nosec: testing legacy migration
         db.conn.commit()
     db.conn.close()
 
