@@ -1170,7 +1170,10 @@ class MetadataDB:
             self.conn.execute("INSERT OR IGNORE INTO progression_state (profile_id) VALUES (?)", (pid,))
             self.conn.execute("INSERT OR IGNORE INTO wallet (profile_id) VALUES (?)", (pid,))
             self.conn.commit()
-        return next(p for p in self.list_profiles() if p["id"] == pid)
+            # Read back under the same lock — a concurrent delete_profile()
+            # landing between commit() and an unlocked list_profiles() call
+            # could otherwise remove the just-created row before we read it.
+            return next(p for p in self.list_profiles() if p["id"] == pid)
 
     def activate_profile(self, profile_id: int) -> dict:
         """Switch the device-local active profile. Raises ValueError for an
@@ -1189,7 +1192,9 @@ class MetadataDB:
                 "UPDATE profiles SET last_active_at = datetime('now') WHERE id = ?", (profile_id,)
             )
             self.conn.commit()
-        return next(p for p in self.list_profiles() if p["id"] == profile_id)
+            # Same race as create_profile() — read back before releasing the
+            # lock so a concurrent delete_profile() can't remove the row first.
+            return next(p for p in self.list_profiles() if p["id"] == profile_id)
 
     def delete_profile(self, profile_id: int) -> None:
         """Delete a profile and everything scoped to it. Refuses to delete
