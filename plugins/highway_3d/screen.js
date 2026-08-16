@@ -16666,7 +16666,7 @@
     // arrangements that merely contain these as substrings (e.g. a
     // "BasslineKeys" arrangement would otherwise match `bass`).
     window.feedBackViz_highway_3d.matchesArrangement = function (songInfo) {
-        const arr = (songInfo && songInfo.arrangement) || '';
+        const arr = songInfo?.arrangement || '';
         return /\b(?:lead|rhythm|bass|combo|guitar)\b/i.test(arr);
     };
 
