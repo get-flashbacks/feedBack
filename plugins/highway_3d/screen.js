@@ -16672,7 +16672,7 @@
         // and steal the song from the piano/keys viz. Yield whenever the
         // active arrangement's real type says keys.
         if (songInfo && songInfo.arrangement_type === 'keys') return false;
-        const arr = (songInfo && songInfo.arrangement) || '';
+        const arr = songInfo?.arrangement || '';
         return /\b(?:lead|rhythm|bass|combo|guitar)\b/i.test(arr);
     };
 
