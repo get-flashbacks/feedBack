@@ -69,7 +69,7 @@ Routes that receive a JSON body must import `Request` from fastapi explicitly an
 
 ### 9. Plugin id must be consistent everywhere
 The plugin id (`folder_library`) must match in:
-- `plugin.json` → `"id"` and `"nav.screen"`
+- `plugin.json` → `"id"`
 - `screen.js` → `PLUGIN_ID` constant and `API` constant (`/api/plugins/folder_library`)
 - `routes.py` → `APIRouter(prefix="/api/plugins/folder_library")`
 
