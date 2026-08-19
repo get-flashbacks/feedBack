@@ -38,7 +38,7 @@ Plugins are the primary extension point. Each plugin lives in `plugins/<name>/` 
   "version": "1.0.0",
   "private": false,
   "type": "visualization",
-  "nav": { "label": "My Plugin", "screen": "plugin-my_plugin" },
+  "nav": { "label": "My Plugin" },
   "screen": "screen.html",
   "script": "screen.js",
   "styles": "assets/plugin.css",
@@ -55,6 +55,8 @@ Plugins are the primary extension point. Each plugin lives in `plugins/<name>/` 
 ```
 
 All fields except `id` and `name` are optional. Plugins can have any combination of frontend (screen/script), backend (routes), and settings.
+
+`nav.screen` and `nav.icon` are **not consumed anywhere** — the plugin loader's nav dropdown builder always derives the screen id as `"plugin-" + plugin.id` (`static/js/plugin-loader.js`), regardless of what a manifest declares. Don't set either field; they have no effect.
 
 `version` and `private` are advisory metadata — the plugin loader does not currently consume them, but plugins commonly include them for publishing/tooling purposes.
 

@@ -49,7 +49,7 @@ Plugins are the primary extension point. Each plugin lives in `plugins/<name>/` 
   "version": "1.0.0",
   "private": false,
   "type": "visualization",
-  "nav": { "label": "My Plugin", "screen": "plugin-my_plugin" },
+  "nav": { "label": "My Plugin" },
   "screen": "screen.html",
   "script": "screen.js",
   "styles": "assets/plugin.css",
