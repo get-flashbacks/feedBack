@@ -126,6 +126,7 @@ _SECURITY_HEADERS = {
         "img-src 'self' data: blob: https:; "
         "font-src 'self' data: https:; "
         "media-src 'self' blob: https:; "
+        "worker-src 'self' blob:; "
         "connect-src 'self' https: wss: ws:; "
         "object-src 'none'; "
         "base-uri 'self'; "
