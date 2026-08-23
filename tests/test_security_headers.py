@@ -61,6 +61,21 @@ def test_csp_blocks_non_https_script_origins_but_allows_self_and_https(client):
     assert "*" not in script_src
 
 
+def test_csp_allows_self_and_blob_workers(client):
+    # alphaTab (tabview/staffview) spawns its rendering worker from a blob:
+    # URL. Without an explicit worker-src, CSP falls back to script-src,
+    # which allows 'self'/https: but not blob: -- silently blocking the
+    # worker and rendering a blank canvas (issue: worker-src missing after
+    # the #44/#47 baseline-CSP addition).
+    r = client.get("/api/version")
+    csp = r.headers["Content-Security-Policy"]
+    worker_src = next(part for part in csp.split(";") if part.strip().startswith("worker-src"))
+    assert "'self'" in worker_src
+    assert "blob:" in worker_src
+    assert "http:" not in worker_src
+    assert "data:" not in worker_src
+
+
 def test_security_headers_present_on_error_responses_too(client):
     # A 404 (unknown route) must still carry the headers — they're set via
     # middleware wrapping the whole call_next chain, not per-route.
