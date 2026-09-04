@@ -1176,7 +1176,10 @@ class MetadataDB:
             # Read back under the same lock — a concurrent delete_profile()
             # landing between commit() and an unlocked list_profiles() call
             # could otherwise remove the just-created row before we read it.
-            return next(p for p in self.list_profiles() if p["id"] == pid)
+            try:
+                return next(p for p in self.list_profiles() if p["id"] == pid)
+            except StopIteration:
+                raise RuntimeError(f"profile {pid} vanished immediately after creation") from None
 
     def activate_profile(self, profile_id: int) -> dict:
         """Switch the device-local active profile. Raises ValueError for an
@@ -1197,7 +1200,10 @@ class MetadataDB:
             self.conn.commit()
             # Same race as create_profile() — read back before releasing the
             # lock so a concurrent delete_profile() can't remove the row first.
-            return next(p for p in self.list_profiles() if p["id"] == profile_id)
+            try:
+                return next(p for p in self.list_profiles() if p["id"] == profile_id)
+            except StopIteration:
+                raise RuntimeError(f"profile {profile_id} vanished immediately after activation") from None
 
     def delete_profile(self, profile_id: int) -> None:
         """Delete a profile and everything scoped to it. Refuses to delete
