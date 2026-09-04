@@ -46,9 +46,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   externalized today, so a stricter policy would need that rewritten first.
   Defense-in-depth: this would have limited the blast radius of the retune
   XSS above (and any future/residual one) even before that fix landed.
+- **CSP now allows `blob:` workers, fixing a blank Tab View / Staff View
+  render.** The baseline CSP added above (#47) covered
+  `script-src`/`style-src`/`img-src`/`font-src`/`media-src`/`connect-src`
+  but never set `worker-src`. Per CSP fallback rules, a worker without an
+  explicit `worker-src` falls back to `script-src`'s policy, which allows
+  `'self'`/`'unsafe-inline'`/`https:` but not `blob:` — and alphaTab (used
+  by the `tabview` and `staffview` plugins) spawns its rendering worker
+  from a `blob:` URL. Without `worker-src`, browsers silently blocked that
+  worker, rendering a blank canvas for every song. Added
+  `worker-src 'self' blob:;`, matching the `blob:` allowance already
+  granted to `img-src`/`media-src` for the same plugin-CDN-asset reason.
 
 ### Fixed
 
+- **A sloppak load failure at the highway websocket now always surfaces a
+  clean `Failed to load sloppak` error instead of a raw exception message.**
+  `sloppak_mod.load_song()` never returns `None` — every failure path (bad
+  zip, missing/corrupt manifest, ...) raises instead — so a `None` guard
+  after the load call was unreachable dead code; real failures were already
+  being caught by the handler's outer exception handler and reported as a
+  raw `{"error": str(e)}`, which can leak implementation details (e.g.
+  filesystem paths) to the client. The load call is now wrapped directly so
+  its exception is caught right there and translated to the same clean,
+  generic message, before arrangement/stem access is ever reached.
 - **Chart events shifted before time zero by a negative `audio_offset` were
   silently dropped.** `parse_arrangement()`'s flat-merge and per-phrase
   paths clipped notes/chords/anchors to a lower bound of `0.0`; a negative
@@ -63,6 +84,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   falling through to a future anchor.
 
 ### Added
+- **README.** The repository had no `README.md` at the root or in `docs/`, so
+  the landing page for the project every plugin depends on was blank. Covers
+  what FeedBack is, Docker and bare-metal quick starts, the environment
+  variables, both song formats and where the format spec actually lives, an
+  orientation to the plugin system, and the development commands.
 - Library card actions can now provide per-song label and icon callbacks, so
   plugins can render dynamic card badges without DOM patching.
 - **Core reader for source rigs (feedpak 1.18.0).** A pack can declare what a
