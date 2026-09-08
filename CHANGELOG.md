@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Several core-driven plays bypassed the `playSong` wrapper chain plugins
+  rely on to reset per-song state.** `window.playSong` is the documented
+  extension point (Constitution II) plugins wrap to hook playback, and it
+  already routes through the wrapper correctly for e.g. the play-queue —
+  but the resume pill, the transport adapter (external playback control),
+  the library click delegate, the arrow-key library nav, and remote-library
+  sync's "play when ready" all called the closed-over `playSong` binding
+  imported directly from `session.js`, so a wrapping plugin (splitscreen,
+  section_map, piano, tabview, staffview all wrap it today) never saw those
+  plays at all — same bypass class as the one `showScreen` had (#923/#924),
+  fixed there by moving plugins onto an event instead of a monkey-patchable
+  global. `playSong` has no such event yet, so every one of these entry
+  points now goes through `window.playSong` instead, matching the pattern
+  the play-queue already used. Removed the now-unused `playSong` host-seam
+  wiring (`resume-session.js` was its only reader).
+
 ### Added
 - **Core reader for source rigs (feedpak 1.18.0).** A pack can declare what a
   MIDI part should sound like by binding a rig; core now reads that binding and
