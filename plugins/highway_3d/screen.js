@@ -1434,7 +1434,13 @@
 
     const FRET_COOLDOWN = 0.5; // seconds a lane fret stays active after last note
 
-    const DIAG_LINGER_S    = 0.55;
+    // Linger was 0.55s — read as "appears and disappears too quickly to
+    // read or form the shape" (feedBack-plugin-fretboard#2/#3; those issues
+    // were filed against the fretboard overlay plugin, but actually describe
+    // this widget — the fretboard plugin has no chord-diagram box of its
+    // own). Roughly doubled; still short enough not to overlap badly with
+    // fast chord changes.
+    const DIAG_LINGER_S    = 1.1;
     const DIAG_ENTRANCE_S  = 0.20;
     const DIAG_CROSSFADE_S = 0.15;
     const DIAG_SIZE_MIN    = 0.08;
