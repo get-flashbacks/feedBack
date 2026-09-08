@@ -906,7 +906,9 @@ async def get_song_info(filename: str, stems: int = 0):
 
     mtime, size = appstate.stat_for_cache(song_path)
     cached = appstate.meta_db.get(cache_key, mtime, size)
-    loop = asyncio.get_event_loop()
+    # get_running_loop(), not get_event_loop(): this is an async route
+    # handler, so a loop is always already running here.
+    loop = asyncio.get_running_loop()
 
     # The stem list is NOT stored in the metadata cache: that is a fixed-column
     # table, and widening it would mean a migration plus a stale row for every

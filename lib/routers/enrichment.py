@@ -310,7 +310,9 @@ async def api_enrichment_identify(request: Request):
         if total == 0:
             raise HTTPException(status_code=400, detail="empty upload")
         # fpcalc subprocess + AcoustID HTTP are blocking — off the event loop.
-        cands = await asyncio.get_event_loop().run_in_executor(
+        # get_running_loop(), not get_event_loop(): this is an async route
+        # handler, so a loop is always already running here.
+        cands = await asyncio.get_running_loop().run_in_executor(
             None, enrichment._identify_by_fingerprint, tmp)
     except enrichment.EnrichTransportError as e:
         return JSONResponse({"error": "acoustid unavailable", "detail": str(e)},
