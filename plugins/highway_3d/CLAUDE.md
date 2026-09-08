@@ -96,7 +96,7 @@ Each entry names the function or banner you should grep for, plus key sub-blocks
 - **Chord name label (gold)** → in the same chord loop, search `chordName`. Cached via `txtMat(chordName, '#e8d080', true)`. Anchored above the chord box.
 - **Barre indicator** (white vertical line at the barre fret during linger) → in the chord loop, gated on `/barre/i.test(chordName) && chDt <= 0`. Position is `fretMid(bFret)` where `bFret` is the lowest fretted string.
 - **Repeat-chord detection** → `prevChordSig` / `prevChordTime` inside the chord loop. Same shape within 0.5 s → `isRepeat = true` (suppresses note bodies, dims frame).
-- **Chord diagram (top-left 2D overlay)** → `drawChordDiagram()`, called from the `lyricsCtx` block at the bottom of the returned `draw()`. The chord-to-display is selected in `update()` under `// ── Chord diagram: track most recently hit chord ──` and stashed in `_diagChord` (most recently hit named chord within the 0.55 s linger window).
+- **Chord diagram (top-left 2D overlay)** → `drawChordDiagram()`, called from the `lyricsCtx` block at the bottom of the returned `draw()`. The chord-to-display is selected in `update()` under `// ── Chord diagram: track most recently hit chord ──` and stashed in `_diagChord` (most recently hit named chord within the 1.1 s linger window).
 
 ### Camera
 - **Reference values** → `CAM_H_BASE`, `CAM_DIST_BASE`, `REF_ASPECT`, `FOCUS_D`, `CAM_LERP_BASE` in the constants block.
@@ -124,7 +124,7 @@ Each entry names the function or banner you should grep for, plus key sub-blocks
 
 ### Lyrics & overlays
 - **Lyrics overlay** → `drawLyrics()`. 2D canvas, top centre, semi-transparent rounded background, syllable-level highlighting (current syllable in white, played in muted, upcoming in dim).
-- **Chord diagram overlay** → `drawChordDiagram()` (see "Chords" above). 2D canvas, top-left, fades over the 0.55 s linger window. Respects `inverted` (column 0 is high-e when inverted, low-E otherwise).
+- **Chord diagram overlay** → `drawChordDiagram()` (see "Chords" above). 2D canvas, top-left, fades over the 1.1 s linger window. Respects `inverted` (column 0 is high-e when inverted, low-E otherwise).
 - **The `lyricsCanvas`** is created in `initScene()` with `z-index:1`, appended to `wrap` **after** `ren.domElement` — this is the empirically-correct stacking order for all browsers/contexts (including splitscreen panels with `position:relative; overflow:hidden`). Don't reorder; see Pitfall #5.
 
 ### Splitscreen
