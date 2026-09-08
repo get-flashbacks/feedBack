@@ -87,9 +87,20 @@ export async function resumeLastSession() {
         // the same wrapper-chain visibility — see the comment on the
         // transport adapter's playSong call in app.js for the fuller
         // rationale.
-        await window.playSong(snap.f, snap.a, {
-            resume: { position: Number(snap.t) || 0, speed: Number(snap.sp) || 1 },
-        });
+        //
+        // A wrapping plugin (splitscreen, section_map, ...) forwards only
+        // (filename, arrangement) to the real playSong, dropping this options
+        // object entirely — core's own playSong would then see options===
+        // undefined and clobber S.pendingResume to null on the very call
+        // meant to restore it, discarding position/speed. Pre-arm
+        // S.pendingResume directly, synchronously, right before the call (no
+        // await in between, so nothing else can touch it first) — core's
+        // playSong preserves an already-armed S.pendingResume when its own
+        // options.resume is missing. The options.resume below is kept too,
+        // for the unwrapped path and any direct caller.
+        const resume = { position: Number(snap.t) || 0, speed: Number(snap.sp) || 1 };
+        S.pendingResume = resume;
+        await window.playSong(snap.f, snap.a, { resume });
     } catch (err) {
         // A transient load/connect failure must not strand the user: keep the
         // snapshot so the pill can re-offer it on the next non-player screen,

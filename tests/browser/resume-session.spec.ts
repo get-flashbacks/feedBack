@@ -149,4 +149,34 @@ test.describe('Resume last session', () => {
     const remaining = await page.evaluate((k) => localStorage.getItem(k), RESUME_KEY);
     expect(remaining).toBeNull();
   });
+
+  test('resumeLastSession() still restores position through a playSong wrapper that drops options', async ({ page }) => {
+    // Regression test: every real ecosystem playSong wrapper (splitscreen,
+    // section_map, ...) forwards only (filename, arrangement) to the next
+    // link in the chain — see static/js/session.js's comment at the
+    // window.playSong call in resumeLastSession(). Simulate that shape
+    // here instead of asserting against the unwrapped path, which would
+    // pass even if the pre-arm fix regressed.
+    await installMockSong(page);
+    await page.evaluate((k) => {
+      const snap = { f: 'mock-song.sloppak', a: 0, t: 30, sp: 1, title: 'Mock Song', ts: Date.now() };
+      localStorage.setItem(k, JSON.stringify(snap));
+    }, RESUME_KEY);
+    await page.evaluate(() => {
+      const orig = window.playSong;
+      // @ts-ignore
+      window.playSong = async function (f, a) { return await orig(f, a); };
+    });
+
+    await page.evaluate(async () => { /* @ts-ignore */ await window.resumeLastSession(); });
+    await page.waitForSelector('#player.active', { timeout: 5000 });
+
+    // If the resume options were dropped and not honored, playback starts
+    // from 0 instead of seeking to the saved position.
+    await expect
+      .poll(async () => page.evaluate(() => (document.getElementById('audio') as HTMLAudioElement).currentTime), {
+        timeout: 5000,
+      })
+      .toBeGreaterThan(20);
+  });
 });
