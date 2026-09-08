@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **highway_3d: chord diagram widget lingers longer before fading** (`plugins/highway_3d`). The floating chord-shape diagram was visible for only ~0.55s after a chord's onset, reported (against the wrong repo — `feedBack-plugin-fretboard`#2/#3) as "appears and disappears too quickly to read or form the shape." Roughly doubled to 1.1s. See #72 for the cross-repo mismatch this traces back to.
+
 ### Security
 
 - **Fixed stored XSS in the retune modal.** `retuneSong()` injected
