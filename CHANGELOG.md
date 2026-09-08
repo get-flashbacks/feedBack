@@ -75,6 +75,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   points now goes through `window.playSong` instead, matching the pattern
   the play-queue already used. Removed the now-unused `playSong` host-seam
   wiring (`resume-session.js` was its only reader).
+- **The above fix broke resume itself whenever a `playSong`-wrapping plugin
+  was installed** — the exact audience it was meant to serve. Every real
+  wrapper (splitscreen, section_map, ...) forwards only `(filename,
+  arrangement)` to the next link in the chain, dropping the options object
+  resume's `{ resume: { position, speed } }` travels in — so a resume
+  routed through the wrapper chain reached core's `playSong()` with
+  `options === undefined`, which clobbered `S.pendingResume` to `null` on
+  the very call meant to restore it: the song played from the top and the
+  saved-position snapshot was discarded. `resumeLastSession()` now pre-arms
+  `S.pendingResume` directly, synchronously, immediately before calling
+  `window.playSong` (nothing else can touch it before the wrapped call
+  reads it), and `playSong()` preserves an already-armed `S.pendingResume`
+  instead of nulling it when its own `options.resume` is absent.
 - **A sloppak load failure at the highway websocket now always surfaces a
   clean `Failed to load sloppak` error instead of a raw exception message.**
   `sloppak_mod.load_song()` never returns `None` — every failure path (bad

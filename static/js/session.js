@@ -715,8 +715,24 @@ export async function playSong(filename, arrangement, options) {
     // arms _pendingResume — consumed at song:ready to restore speed + seek to
     // the saved position, then start — so autostart and resume don't both try
     // to begin playback from different positions.
+    //
+    // options.resume travels only when nothing between the caller and here
+    // wraps window.playSong — a plugin wrapper forwards only (filename,
+    // arrangement) and drops the options object (see the comment at the
+    // window.playSong call in resume-session.js), so a resume routed through
+    // the wrapper chain would otherwise arrive here as options===undefined
+    // and get clobbered to null on the very call meant to restore it.
+    // resume-session.js pre-arms S.pendingResume itself, synchronously,
+    // immediately before calling window.playSong — nothing else touches
+    // this field in between (single-threaded, no intervening await at that
+    // callsite) — so a pre-armed value reaching here with no options.resume
+    // is exactly that dropped-by-a-wrapper resume request, not stale state
+    // from an earlier, already-consumed resume. Preserve it instead of
+    // clearing it.
     if (options && options.resume && Number(options.resume.position) > 0) {
         S.pendingResume = options.resume;
+        _pendingAutostart = false;
+    } else if (S.pendingResume && Number(S.pendingResume.position) > 0) {
         _pendingAutostart = false;
     } else {
         S.pendingResume = null;
