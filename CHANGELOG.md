@@ -37,6 +37,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `window.playSong` (nothing else can touch it before the wrapped call
   reads it), and `playSong()` preserves an already-armed `S.pendingResume`
   instead of nulling it when its own `options.resume` is absent.
+- **The above fix could leak a resume's saved position onto the next,
+  unrelated song.** `playSong()` never awaits chart readiness before
+  resolving — it only fires off `window.highway.connect(...)` and returns —
+  so if the resumed song's chart never reached `song:ready` (a stuck/failed
+  WebSocket load), `resumeLastSession()`'s `catch` never ran and nothing
+  else cleared the pre-armed `S.pendingResume` (only the `song:ready`
+  consumer does). The next, completely unrelated fresh play (a library
+  click, transport start — anything else now routed through
+  `window.playSong`) would then inherit the stale value and get seeked to
+  the old song's saved position with autostart suppressed. Fixed by tagging
+  the armed value with the resumed filename (`f`) and only preserving it in
+  `playSong()` when that tag matches the filename actually being loaded;
+  anything stale for a different song now falls through to a normal clear.
 
 ### Added
 - **Core reader for source rigs (feedpak 1.18.0).** A pack can declare what a

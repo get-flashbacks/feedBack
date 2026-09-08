@@ -98,7 +98,19 @@ export async function resumeLastSession() {
         // playSong preserves an already-armed S.pendingResume when its own
         // options.resume is missing. The options.resume below is kept too,
         // for the unwrapped path and any direct caller.
-        const resume = { position: Number(snap.t) || 0, speed: Number(snap.sp) || 1 };
+        //
+        // Tagged with `f` (the resumed filename): playSong() never awaits
+        // chart readiness before resolving, so a WS-level load failure for
+        // THIS song neither rejects here (the catch below never runs) nor
+        // clears the armed value — nothing else does either, since
+        // consumption only happens at song:ready. Without the tag, a stale
+        // pre-armed value would silently get inherited by the next
+        // unrelated fresh play (a library click, transport start — anything
+        // else routed through window.playSong) and seek that new song to
+        // this one's saved position. playSong() only preserves a pre-armed
+        // S.pendingResume when its `f` matches the filename actually being
+        // loaded, so a stale tag for a different song is discarded instead.
+        const resume = { position: Number(snap.t) || 0, speed: Number(snap.sp) || 1, f: snap.f };
         S.pendingResume = resume;
         await window.playSong(snap.f, snap.a, { resume });
     } catch (err) {
