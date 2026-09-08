@@ -80,7 +80,14 @@ export async function resumeLastSession() {
     if (!snap) { _hideResumePill(); return false; }
     _hideResumePill();
     try {
-        await host.playSong(snap.f, snap.a, {
+        // window.playSong, not host.playSong: the host seam hands across the
+        // bare session.js binding, which a plugin's playSong wrapper (several
+        // reset per-song state there) never sees. Resuming a session is a
+        // fresh play like any other click/shortcut-driven one, so it needs
+        // the same wrapper-chain visibility — see the comment on the
+        // transport adapter's playSong call in app.js for the fuller
+        // rationale.
+        await window.playSong(snap.f, snap.a, {
             resume: { position: Number(snap.t) || 0, speed: Number(snap.sp) || 1 },
         });
     } catch (err) {
