@@ -723,16 +723,28 @@ export async function playSong(filename, arrangement, options) {
     // the wrapper chain would otherwise arrive here as options===undefined
     // and get clobbered to null on the very call meant to restore it.
     // resume-session.js pre-arms S.pendingResume itself, synchronously,
-    // immediately before calling window.playSong — nothing else touches
-    // this field in between (single-threaded, no intervening await at that
-    // callsite) — so a pre-armed value reaching here with no options.resume
-    // is exactly that dropped-by-a-wrapper resume request, not stale state
-    // from an earlier, already-consumed resume. Preserve it instead of
-    // clearing it.
+    // immediately before calling window.playSong, tagged with the resumed
+    // filename (`f`) — so a pre-armed value reaching here with no
+    // options.resume can be preserved as that dropped-by-a-wrapper resume
+    // request, PROVIDED it's tagged for the song actually being loaded
+    // right now (`filename`).
+    //
+    // That check is load-bearing, not decorative: playSong() never awaits
+    // chart readiness before resolving, so a WS-level load failure for the
+    // resumed song neither rejects resumeLastSession()'s call (its catch
+    // never runs) nor clears S.pendingResume — nothing does, since
+    // consumption only happens at song:ready. Without the filename check, a
+    // stale armed value from that failed resume would get silently
+    // inherited by the NEXT, completely unrelated fresh play (a library
+    // click, transport start — anything else now routed through
+    // window.playSong) and seek that new song to the old one's saved
+    // position with autostart suppressed. Matching on `filename` scopes the
+    // preserve to the one call it actually belongs to; anything stale for a
+    // different song falls through to the plain clear below.
     if (options && options.resume && Number(options.resume.position) > 0) {
         S.pendingResume = options.resume;
         _pendingAutostart = false;
-    } else if (S.pendingResume && Number(S.pendingResume.position) > 0) {
+    } else if (S.pendingResume && S.pendingResume.f === filename && Number(S.pendingResume.position) > 0) {
         _pendingAutostart = false;
     } else {
         S.pendingResume = null;

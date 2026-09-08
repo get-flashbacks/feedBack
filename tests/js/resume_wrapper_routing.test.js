@@ -14,9 +14,20 @@
 //   1. resume-session.js pre-arms S.pendingResume directly, synchronously,
 //      immediately before calling window.playSong — nothing else can touch
 //      S.pendingResume in between (single JS thread, no intervening await at
-//      that callsite).
+//      that callsite) — tagged with `f` (the resumed filename).
 //   2. session.js's playSong() preserves an already-armed S.pendingResume
-//      instead of nulling it when its own options.resume is absent.
+//      instead of nulling it when its own options.resume is absent, but ONLY
+//      when its `f` tag matches the filename actually being loaded.
+//
+// The filename tag closes a second bug caught in review of the first fix:
+// playSong() never awaits chart readiness before resolving, so a WS-level
+// load failure for the resumed song neither rejects resumeLastSession()'s
+// call (its catch never runs) nor clears S.pendingResume — nothing else does
+// either, since consumption only happens at song:ready. Without the tag, a
+// stale armed value from that failed resume would be silently inherited by
+// the next unrelated fresh play (a library click, transport start — anything
+// else routed through window.playSong) and seek THAT song to the old one's
+// saved position with autostart suppressed.
 //
 // This can't be exercised as a headless unit test (playSong() is deeply coupled
 // to the DOM/audio element/highway instance) — the behavioral case lives in
@@ -35,11 +46,20 @@ const ROOT = path.join(__dirname, '..', '..');
 const RESUME_SESSION_JS = fs.readFileSync(path.join(ROOT, 'static', 'js', 'resume-session.js'), 'utf8');
 const SESSION_JS = fs.readFileSync(path.join(ROOT, 'static', 'js', 'session.js'), 'utf8');
 
-test('resumeLastSession() pre-arms S.pendingResume before (not after) calling window.playSong', () => {
+test('resumeLastSession() pre-arms S.pendingResume, tagged with the resumed filename, before (not after) calling window.playSong', () => {
     const fnStart = RESUME_SESSION_JS.indexOf('export async function resumeLastSession');
     assert.ok(fnStart >= 0, 'resumeLastSession() not found in resume-session.js');
     const fnEnd = RESUME_SESSION_JS.indexOf('\n}', fnStart);
     const body = RESUME_SESSION_JS.slice(fnStart, fnEnd);
+
+    const resumeObjMatch = body.match(/const resume = \{[^}]*\};/);
+    assert.ok(resumeObjMatch, 'resumeLastSession() must build a `resume` object');
+    assert.ok(
+        /\bf:\s*snap\.f\b/.test(resumeObjMatch[0]),
+        'the armed `resume` object must be tagged with `f: snap.f` — without it, a stale pre-armed '
+        + 'value from a resume whose chart never reached song:ready would be indistinguishable from '
+        + 'one that legitimately belongs to the next, unrelated fresh play',
+    );
 
     const armIdx = body.indexOf('S.pendingResume = resume;');
     const callIdx = body.indexOf('await window.playSong(snap.f, snap.a, { resume });');
@@ -62,24 +82,27 @@ test('resumeLastSession() pre-arms S.pendingResume before (not after) calling wi
     );
 });
 
-test("session.js's playSong() preserves a pre-armed S.pendingResume instead of clobbering it to null", () => {
+test("session.js's playSong() preserves a pre-armed S.pendingResume instead of clobbering it to null, but only when it's tagged for the song being loaded", () => {
     const fnStart = SESSION_JS.indexOf('export async function playSong(');
     assert.ok(fnStart >= 0, 'playSong() not found in session.js');
     // The pendingResume/_pendingAutostart decision sits in the first ~150 lines
     // of the function body; bound the search so a match elsewhere in the file
     // (there is none today, but this is a source-scan, not a parser) can't
     // produce a false pass.
-    const body = SESSION_JS.slice(fnStart, fnStart + 6000);
+    const body = SESSION_JS.slice(fnStart, fnStart + 8000);
 
     const optionsArmIdx = body.indexOf('S.pendingResume = options.resume;');
     assert.ok(optionsArmIdx >= 0, 'playSong() must still arm S.pendingResume from options.resume when present');
 
-    const preserveMatch = body.match(/else if\s*\(\s*S\.pendingResume\s*&&\s*Number\(S\.pendingResume\.position\)\s*>\s*0\s*\)\s*\{([\s\S]*?)\}/);
+    const preserveMatch = body.match(/else if\s*\(\s*S\.pendingResume\s*&&\s*S\.pendingResume\.f\s*===\s*filename\s*&&\s*Number\(S\.pendingResume\.position\)\s*>\s*0\s*\)\s*\{([\s\S]*?)\}/);
     assert.ok(
         preserveMatch,
-        'playSong() must have an `else if (S.pendingResume && ...)` branch between the options.resume '
-        + 'branch and the final else, preserving a pre-armed resume request that a wrapper dropped '
-        + 'from options',
+        'playSong() must have an `else if (S.pendingResume && S.pendingResume.f === filename && ...)` '
+        + 'branch between the options.resume branch and the final else — preserving a pre-armed resume '
+        + 'request that a wrapper dropped from options, but ONLY when it is tagged for the filename '
+        + 'actually being loaded. Without the filename check, a pre-armed value left behind by a resume '
+        + 'whose chart never reached song:ready (so it was never consumed) would be wrongly inherited by '
+        + 'the next unrelated fresh play',
     );
     assert.ok(
         !/S\.pendingResume\s*=/.test(preserveMatch[1]),
