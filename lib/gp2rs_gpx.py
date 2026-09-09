@@ -2530,14 +2530,23 @@ def _auto_select_gpx(tracks: list[dict]) -> tuple[list[int], dict[int, str]]:
 
         is_bass = (t['string_pitches'] and max(t['string_pitches']) <= 48) \
             or t['midi_program'] in BASS_PROGS
-        is_keys = (not t['string_pitches'] and t['midi_program'] in KEYS_PROGS) \
-            or any(kw in name_l for kw in ('piano', 'keys', 'organ'))
         # GP6+ often notates piano/keys parts on a fretted string template, so
         # string_pitches alone can't distinguish a keyboard part from a real
-        # guitar. Check is_keys (which also matches on name/program) before
-        # is_guitar, so a track explicitly named "Keys ..." isn't swept into
+        # guitar (feedBack: "Combo" mislabeled piano arrangement). Gate only
+        # the midi_program heuristic on `not string_pitches` (to avoid
+        # grabbing real guitars); a name/arrangement keyword forces keys
+        # regardless, so a track explicitly named "Keys ..." isn't swept into
         # the unhinted-guitar Lead/Rhythm/Combo bucket just because it has
-        # string tuning data (feedBack: "Combo" mislabeled piano arrangement).
+        # string tuning data. This mirrors convert_gpif's sibling is_keys rule
+        # above (line ~1682) exactly, including its accepted trade-off: a
+        # genuinely fretted guitar whose name merely *contains* "piano"/
+        # "keys"/"organ" as a substring (e.g. "Keys of the Kingdom") is a
+        # false positive here too, same as there — the name match is the
+        # only signal these two functions have for a fretted keyboard part,
+        # so it has to win. Check is_keys before is_guitar so the keys match
+        # actually takes effect.
+        is_keys = (not t['string_pitches'] and t['midi_program'] in KEYS_PROGS) \
+            or any(kw in name_l for kw in ('piano', 'keys', 'keyboard', 'organ'))
         is_guitar = bool(t['string_pitches']) and not is_bass and not is_keys
 
         if is_bass:
