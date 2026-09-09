@@ -1312,16 +1312,18 @@ def test_auto_select_gpx_unhinted_does_not_steal_later_rhythm():
     assert names[indices[1]] == "Combo"
 
 
-# Regression: a genuinely fretted guitar track whose name merely *contains*
-# "keys"/"piano"/"organ" as a substring (not a real keyboard part) must not be
-# misclassified as keys just because is_keys's name/program check runs before
-# is_guitar in _auto_select_gpx. Real Tuning/Pitches data (string_pitches) is
-# actual instrument evidence and should win over an incidental name substring.
-_GPIF_GUITAR_NAMED_LIKE_KEYS = """
+# This PR's headline fix: GP6+ often notates a piano/keys part on a fretted
+# string template, so a keyboard track named "Keys ..." usually HAS
+# string_pitches too. is_keys's name match must win over that fret data —
+# gating it on `not string_pitches` (an earlier revision of this fix did,
+# briefly, before review caught that it silently undid this exact case) would
+# sweep a real keyboard part back into the unhinted-guitar Lead/Rhythm/Combo
+# bucket, the precise "Combo" mislabeling this PR exists to fix.
+_GPIF_FRETTED_KEYS_TRACK = """
 <GPIF>
   <Score><Title>T</Title><Artist>A</Artist></Score>
   <Tracks>
-    <Track id="0"><Name>Keys of the Kingdom</Name>
+    <Track id="0"><Name>Keys</Name>
       <Property name="Tuning"><Pitches>40 45 50 55 59 64</Pitches></Property></Track>
   </Tracks>
   <MasterBars><MasterBar><Time>4/4</Time><Bars>0</Bars></MasterBar></MasterBars>
@@ -1342,9 +1344,9 @@ _GPIF_GUITAR_NAMED_LIKE_KEYS = """
 """
 
 
-def test_auto_select_gpx_fretted_track_named_like_keys_is_not_misclassified():
-    root = ET.fromstring(_GPIF_GUITAR_NAMED_LIKE_KEYS)
+def test_auto_select_gpx_fretted_track_named_keys_is_still_classified_as_keys():
+    root = ET.fromstring(_GPIF_FRETTED_KEYS_TRACK)
     tracks = gp2rs_gpx._gpif_tracks(root)
     assert tracks[0]['string_pitches']  # sanity: real fret data is present
     _indices, names = gp2rs_gpx._auto_select_gpx(tracks)
-    assert list(names.values()) != ["Keys"]
+    assert list(names.values()) == ["Keys"]
