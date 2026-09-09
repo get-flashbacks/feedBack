@@ -400,6 +400,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   engine (`app.js`, `highway.js`, `playSong`, `showScreen`, the capability registry).
 
 ### Fixed
+- **`convert_wem` no longer blocks the event loop inside `highway_ws`.** Both
+  call sites in `lib/routers/ws_highway.py` (loose-folder and archive audio
+  conversion) invoked `convert_wem` directly inside the `async def
+  highway_ws` handler; `convert_wem` shells out to vgmstream-cli/ffmpeg via
+  `subprocess.run` with up to a 120s timeout, so a single slow/large
+  conversion held the whole event loop and stalled every other concurrent
+  WebSocket connection on that worker for as long as it ran. Both sites now
+  run through `loop.run_in_executor()`, reusing the `contextvars.copy_context()`
+  snapshot already taken earlier in the function so the bound `ws_conn_id`
+  correlation ID still applies to log lines raised inside the executor
+  thread — same pattern this file already uses for `load_song`/
+  `sloppak_mod.load_song`.
+- **highway_3d chord diagram no longer mirrors on Invert.** The top-left chord
+  diagram overlay (`drawChordDiagram()`) was flipping its column order
+  (high-e/low-E swapped) whenever the highway's Invert toggle was on, passed
+  through as `inverted: _invertedCached` at both call sites. The diagram's
+  orientation should be fixed regardless of that toggle, so both call sites
+  now pass `inverted: false`. Note: `plugins/highway_3d/CLAUDE.md` had
+  documented the mirroring as this overlay's contract, but that line traces
+  only to a single squashed "Clean release snapshot" commit with no
+  surviving design rationale — treated here as an inaccurate description of
+  a bug, not a protected feature, and updated accordingly.
 - **Count-in follows the song's meter and its pickup measure.** The count-in
   (loop wrap, section practice, and the "Countdown before song" setting) always
   clicked exactly four beats, so a 3/4 song was counted in 4/4, and a song
@@ -411,6 +433,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bar shorter than that meter shortens the count by its length: a 1-beat pickup
   in 4/4 counts "1 2 3" and the music enters on 4. Songs without beats — pre-chart,
   minigames, synthetic highways — still get four.
+
 - **GP8 asset resolution honours the directory the registry named.**
   `<EmbeddedFilePath>` is matched on filename stem so a format variant of the
   same recording can win (an `.ogg` beside the declared `.mp3` is copied out

@@ -473,7 +473,15 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
                     tmp_suffix = uuid.uuid4().hex[:8]
                     tmp_base = appstate.audio_cache_dir / f"audio_{audio_id}.{tmp_suffix}"
                     try:
-                        produced = convert_wem(str(wem_resolved), str(tmp_base))
+                        # convert_wem shells out to vgmstream-cli/ffmpeg via
+                        # subprocess.run (up to 120s timeout) — bare-calling it
+                        # here would block the whole event loop, stalling every
+                        # other concurrent connection's WebSocket traffic for
+                        # as long as the conversion takes.
+                        produced = await loop.run_in_executor(
+                            None,
+                            lambda: _ctx.run(convert_wem, str(wem_resolved), str(tmp_base)),
+                        )
                         ext = Path(produced).suffix
                         final_path = appstate.audio_cache_dir / f"audio_{audio_id}{ext}"
                         os.replace(produced, final_path)
@@ -495,7 +503,13 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
                 audio_error = "No WEM audio files were found inside this archive."
             else:
                 try:
-                    audio_path = convert_wem(wem_files[0], os.path.join(tmp, "audio"))
+                    # Same reasoning as the loose-folder conversion above:
+                    # convert_wem is a blocking subprocess call and must not
+                    # run inline on the event loop.
+                    audio_path = await loop.run_in_executor(
+                        None,
+                        lambda: _ctx.run(convert_wem, wem_files[0], os.path.join(tmp, "audio")),
+                    )
                     ext = Path(audio_path).suffix
                     audio_dest = appstate.audio_cache_dir / f"audio_{audio_id}{ext}"
                     shutil.copy2(audio_path, audio_dest)
@@ -513,6 +527,11 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
                 "name": a.name,
                 "smart_name": smart_names[i],
                 "notes": len(a.notes) + sum(len(c.notes) for c in a.chords),
+                # Manifest `type` (sloppak.py:942) — authoritative instrument
+                # classification, independent of the display name. Lets viz
+                # auto-selection (e.g. the piano viz's matchesArrangement)
+                # match on real type instead of name-sniffing.
+                "type": (a.type or "").strip().lower() if isinstance(a.type, str) else "",
             }
             for i, a in enumerate(song.arrangements)
         ]
@@ -525,6 +544,9 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
             "arrangement": arr.name,
             "arrangement_smart_name": smart_names[best],
             "arrangement_index": best,
+            # Named distinctly from the top-level "type" (WS message
+            # discriminator, = "song_info") to avoid colliding with it.
+            "arrangement_type": (arr.type or "").strip().lower() if isinstance(arr.type, str) else "",
             # Echo the resolved naming mode so highway.js doesn't have to
             # re-read localStorage (which can be unavailable / disagree with
             # app.js's in-memory cache when storage writes fail).
