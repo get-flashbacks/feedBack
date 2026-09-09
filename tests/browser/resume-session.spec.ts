@@ -234,6 +234,16 @@ test.describe('Resume last session', () => {
     // wrongly match and inherit the stale position. S._pendingResumeArmed
     // is the one-shot gate that closes this: it's consumed by the first
     // playSong() call that reads it, so it can't satisfy a second one.
+    //
+    // The stalled resume is issued through a dropping wrapper — like the
+    // "still restores position through a playSong wrapper" test above —
+    // because without one, resumeLastSession()'s own options.resume
+    // survives intact and takes the FIRST branch in session.js's playSong,
+    // which unconditionally clears S._pendingResumeArmed itself. That
+    // would make this test pass even if the actual preserve-branch (the
+    // one guarded by S._pendingResumeArmed, which is what a real dropped-
+    // options wrapper hits) regressed — this needs to exercise that branch
+    // specifically, per review.
     await page.evaluate(() => {
       class StuckWebSocket {
         static CONNECTING = 0; static OPEN = 1; static CLOSING = 2; static CLOSED = 3;
@@ -250,8 +260,14 @@ test.describe('Resume last session', () => {
       const snap = { f: 'mock-song.sloppak', a: 0, t: 30, sp: 1, title: 'Mock Song', ts: Date.now() };
       localStorage.setItem(k, JSON.stringify(snap));
     }, RESUME_KEY);
+    await page.evaluate(() => {
+      const orig = window.playSong;
+      // @ts-ignore
+      window.playSong = async function (f, a) { return await orig(f, a); };
+    });
 
-    // Stalled resume of mock-song.sloppak — never reaches song:ready.
+    // Stalled resume of mock-song.sloppak, routed through the dropping
+    // wrapper — never reaches song:ready.
     await page.evaluate(async () => { /* @ts-ignore */ await window.resumeLastSession(); });
 
     // A later, ordinary play of the SAME filename — no resume intent.
