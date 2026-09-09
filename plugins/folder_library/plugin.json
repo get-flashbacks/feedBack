@@ -3,7 +3,7 @@
   "name": "Folder Library",
   "version": "1.8.0",
   "bundled": true,
-  "nav": { "label": "Folders", "screen": "plugin-folder_library" },
+  "nav": { "label": "Folders" },
   "screen": "screen.html",
   "script": "screen.js",
   "routes": "routes.py"

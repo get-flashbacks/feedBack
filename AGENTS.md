@@ -2,6 +2,17 @@
 
 FeedBack is a self-hosted web app for browsing, playing, and practicing interactive music notation, built around its own open `.sloppak` chart format. Charts come from importing Guitar Pro (GP5/GP8) or MusicXML, or from authoring in the built-in editor. It runs as a Docker container with a FastAPI backend (`server.py`), vanilla JavaScript frontend (`static/`), shared Python libraries (`lib/`), and an extensive plugin system (`plugins/`). There are no frontend frameworks — everything is plain JS, HTML, and Tailwind CSS.
 
+## Context & Philosophy
+
+FeedBack is a self-hosted, plugin-first music practice app. These principles guide every contribution:
+
+- **Performance is non-negotiable.** The highway renders at 60 fps on the main thread. Any change that adds per-frame DOM work, blocks the main thread, or increases memory pressure must be profiled and justified.
+- **Backward compatibility is valued, but v3 is the only supported UI.** The classic v2 shell, `FEEDBACK_UI` / `/v2` opt-outs, and legacy player-chrome anchors are gone. Supporting them is out of scope.
+- **Plugins are first-class citizens.** The plugin system is the primary extension mechanism. Core APIs (`playSong`, `showScreen`, `createHighway`, `highway.*`, `window.feedBack.*`) are stable contracts. Breaking a plugin contract is a regression.
+- **Format changes require spec governance.** The `.sloppak` / `feedpak` format is defined in a separate repository. Any new manifest key, file, or directory must go through the FEP process before landing here. The `feedpak-spec` CI job enforces this with no in-repo bypass.
+- **No frontend frameworks.** Core uses vanilla JS, fetch, and prebuilt Tailwind. Runtime CSS JIT (Tailwind Play CDN) is explicitly forbidden because it dropped ~26% of frames in profiling.
+- **Security by default.** Plugin assets are sandboxed behind `/api/plugins/<id>/`. Diagnostics bundles are shared with maintainers and posted to GitHub issues — never include secrets. Server-side files are validated against allowlists on both export and import.
+
 ## Architecture Quick Reference
 
 ```
@@ -55,8 +66,6 @@ Plugins are the primary extension point. Each plugin lives in `plugins/<name>/` 
 ```
 
 All fields except `id` and `name` are optional. Plugins can have any combination of frontend (screen/script), backend (routes), and settings.
-
-`nav.screen` and `nav.icon` are **not consumed anywhere** — the plugin loader's nav dropdown builder always derives the screen id as `"plugin-" + plugin.id` (`static/js/plugin-loader.js`), regardless of what a manifest declares. Don't set either field; they have no effect.
 
 `version` and `private` are advisory metadata — the plugin loader does not currently consume them, but plugins commonly include them for publishing/tooling purposes.
 
@@ -627,6 +636,9 @@ of a code comment.)
 - **Naming** — camelCase for JS functions, kebab-case for CSS classes, snake_case for plugin IDs
 - **Text selection (v3)** — the v3 UI defaults to `user-select: none` on `html` (in `static/v3/v3.css`) so accidental drag/double-click selection of chrome never looks broken. Form fields are always re-enabled, and a **plugin's mounted screen subtree (`.screen[id^="plugin-"]`) stays selectable by default**, so a plugin's copy-worthy text (lyrics, chord names, results, diagnostics) is unaffected — *unless your plugin renders copyable content OUTSIDE its `plugin-<id>` screen* (e.g. injected into the player chrome / a HUD overlay), which inherits the non-select default. Opt such content back in with the core-served **`.fb-selectable`** class (it sets `user-select: text` on the element + descendants; works for runtime-installed plugins since it's hand-authored in core CSS, not a scanned Tailwind utility). Never use a `* { user-select: none }` rule (breaks input carets/IME), and never use `user-select: none` to "lock" text — keep errors, IDs, paths, versions, and metadata selectable.
 - **Player layout** — `#player` is `display:flex; flex-direction:column; position:fixed; inset:0`. `#highway` is `flex:1`. `#player-controls` sits at the bottom. Hiding the highway collapses the layout — use `margin-top: auto` on controls if you need to hide it.
+- **Error boundaries** — unhandled promise rejections and runtime errors in plugins should not crash the host. Wrap plugin entry points in try/catch; log to `console.error` with a plugin-specific prefix such as `[<plugin-id>]`, matching the bundled plugin convention.
+- **Security** — never log secrets, API keys, or session tokens. Diagnostics contributions are shared externally with maintainers. Plugin routes are sandboxed; never trust client-side input on the backend.
+- **Accessibility** — interactive elements must be keyboard-focusable. Use semantic HTML. The v3 UI defaults to `user-select: none` on `html`; plugin content outside `plugin-<id>` screens must opt back in with `.fb-selectable`.
 
 ## Backend Conventions
 
@@ -637,6 +649,8 @@ of a code comment.)
 - **Error handling** — graceful fallbacks (audio conversion errors don't crash the song, missing art returns placeholder)
 - **Type hints** — used sparingly (`Path | None`, `dict`, `list`)
 - **Docstrings** — minimal; code is self-documenting
+- **Security** — validate all plugin-provided paths (no `..`, no absolute paths, no backslashes). The plugin loader rejects these at load time. Never expose internal paths or stack traces to the client.
+- **Thread safety** — SQLite access goes through `MetadataDB` with `threading.Lock`. Never access the DB directly from a background thread without the lock.
 
 ## Testing
 
@@ -712,6 +726,58 @@ Message delivery is incremental. You may receive `loading` updates and `lyrics` 
 
 5. **Plugin load order** — Plugins load alphabetically by directory name. This determines the `playSong` wrapper chain order and which plugin's UI elements appear first. If your plugin depends on another's globals, check at runtime (`typeof window.X === 'function'`), not at load time.
 
+## Intentionally Ignored Issues
+
+This section documents known limitations, legacy behavior, and accepted trade-offs that contributors should not attempt to "fix" without first discussing with maintainers.
+
+### v2 shell references
+
+The classic v2 shell and its `FEEDBACK_UI` / `/v2` opt-outs are removed. External plugin docs, blog posts, or integration guides that reference `#player-controls` anchors, `/v2` paths, or `FEEDBACK_UI` are describing dead paths. Updating external references is not a core task.
+
+### `original_audio` (#933)
+
+This manifest key shipped without a feedpak-spec entry. Third-party packers reverse-engineered a folder convention from a code comment. The key is grandfathered in the exceptions file, which only shrinks. Do not add new undocumented keys as "quick fixes" — start a FEP conversation instead.
+
+### Bare Python imports vs `load_sibling`
+
+During the transition period, bare `import sibling` from `routes.py` still works but prints a startup warning when two plugins ship same-named top-level modules. The warning is intentional: it encourages migration without breaking existing plugins. Do not suppress the warning or revert plugins to bare imports.
+
+### `factory.panelControls` legacy fallback
+
+Viz providers that declare `settings` + `applySetting` are the new standard. `factory.panelControls` is still read by older hosts as a fallback. Removing the fallback would break existing plugins; it stays until hosts no longer need it.
+
+### `_drawHooks` scope
+
+Draw hooks fire for the default 2D renderer and for custom renderers that explicitly call `window.highway.fireDrawHooks(ctx, W, H)` (e.g. the bundled 3D highway). They do **not** fire for every custom renderer. Overlay plugins that rely on `_drawHooks` should check `highway.isDefaultRenderer()` or be aware that their hook may be silent under some viz picks.
+
+### Canvas context-type swap limitations
+
+`cloneNode(false)` preserves HTML attributes but not event listeners or expando properties. This is a browser limitation, not a bug. Plugins must listen for `highway:canvas-replaced` and re-register. Caching the canvas reference across a swap is a known footgun; fixing it in core would require breaking the renderer contract.
+
+### `localStorage` graceful degradation
+
+In private mode, sandboxed iframes, and some test runners, `localStorage` is unavailable. The viz picker falls back to the current `<option>` value for the current session only. This is intentional — persisting to `sessionStorage` or IndexedDB would add complexity for edge cases that don't survive navigation anyway.
+
+### Plugin gitlink clobbering
+
+Switching branches on the main repo can delete or overwrite `plugins/` directories because they are separate git repos (gitlinks or clones). The documented workaround (`git update-index --assume-unchanged`) is the standard mitigation. Automatically preserving plugin state across branch switches is out of scope for core.
+
+### Tailwind stylesheet rebuild enforcement
+
+`tailwind-fresh` CI diffs the committed `static/tailwind.min.css` against a fresh build. New Tailwind classes require running `bash scripts/build-tailwind.sh` and committing the rebuilt CSS. There is no in-repo bypass; runtime CSS JIT is forbidden. This is an intentional constraint to prevent frame drops.
+
+### `feedpak-spec` CI gate
+
+The `feedpak-spec` job fails any PR whose code touches a manifest key the spec doesn't declare. The exceptions file is a closed grandfather list that only shrinks. Bypassing this check is not allowed; missing format features must go through the FEP process.
+
+### ES module `screen.js` load semantics
+
+`<script type="module">` `onload` fires only after the entire static-import graph evaluates. Module top-level code does **not** re-run when the user re-enters the screen at the same version. This is spec-compliant browser behavior, not a bug. Per-visit initialization must live in a `screen:changed` handler.
+
+### rAF throttling when backgrounded
+
+Browsers throttle `requestAnimationFrame` when the main window is not the focused tab. This affects pane windows that are being viewed while the main window is backgrounded. Event-driven panels are unaffected. This is browser behavior, not a feedBack bug.
+
 # Contributing to feedBack
 
 Thanks for contributing! This guide covers the workflow for `got-feedBack/feedBack` (core) and `got-feedBack/feedBack-desktop`. For plugin-specific rules see [docs/plugins.md](docs/plugins.md).
@@ -737,7 +803,7 @@ Tip: GitHub's "Create a branch" button on an issue (Development panel) auto-name
 ## Issue policy
 
 | Branch type | Issue required |
-| --- | --- |
+|---|---|
 | `fix/*` | Yes — always. Bugs are reported and triaged before code. |
 | `feature/*` | Yes for external contributors; maintainer's discretion for small additions. |
 | `chore/`, `docs/`, `refactor/` | No. |
@@ -772,3 +838,5 @@ fix(highway): correct fret position for 7-string arrangements
 ---
 
 Maintainer docs (release runbooks, pipeline internals, governance) live in the org-internal `.github-private` repository.
+
+​CLAUDE.md and AGENTS.md intentionally remain distinct. CLAUDE.md is an officially maintained repository file, while AGENTS.md serves as an unofficial reference created for personal workflow assistance. Maintaining this separation prevents unwanted churn on tracked upstream files.

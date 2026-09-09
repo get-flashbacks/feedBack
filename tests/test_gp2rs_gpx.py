@@ -1310,3 +1310,41 @@ def test_auto_select_gpx_unhinted_does_not_steal_later_rhythm():
     assert names[indices[0]] == "Lead"
     assert names[indices[2]] == "Rhythm"
     assert names[indices[1]] == "Combo"
+
+
+# Regression: a genuinely fretted guitar track whose name merely *contains*
+# "keys"/"piano"/"organ" as a substring (not a real keyboard part) must not be
+# misclassified as keys just because is_keys's name/program check runs before
+# is_guitar in _auto_select_gpx. Real Tuning/Pitches data (string_pitches) is
+# actual instrument evidence and should win over an incidental name substring.
+_GPIF_GUITAR_NAMED_LIKE_KEYS = """
+<GPIF>
+  <Score><Title>T</Title><Artist>A</Artist></Score>
+  <Tracks>
+    <Track id="0"><Name>Keys of the Kingdom</Name>
+      <Property name="Tuning"><Pitches>40 45 50 55 59 64</Pitches></Property></Track>
+  </Tracks>
+  <MasterBars><MasterBar><Time>4/4</Time><Bars>0</Bars></MasterBar></MasterBars>
+  <Bars>
+    <Bar id="0"><Voices>0</Voices></Bar>
+  </Bars>
+  <Voices>
+    <Voice id="0"><Beats>0</Beats></Voice>
+  </Voices>
+  <Beats>
+    <Beat id="0"><Rhythm ref="r0"/><Notes>0</Notes></Beat>
+  </Beats>
+  <Notes>
+    <Note id="0"><Property name="String"><String>0</String></Property><Property name="Fret"><Fret>0</Fret></Property></Note>
+  </Notes>
+  <Rhythms><Rhythm id="r0"><NoteValue>Quarter</NoteValue></Rhythm></Rhythms>
+</GPIF>
+"""
+
+
+def test_auto_select_gpx_fretted_track_named_like_keys_is_not_misclassified():
+    root = ET.fromstring(_GPIF_GUITAR_NAMED_LIKE_KEYS)
+    tracks = gp2rs_gpx._gpif_tracks(root)
+    assert tracks[0]['string_pitches']  # sanity: real fret data is present
+    _indices, names = gp2rs_gpx._auto_select_gpx(tracks)
+    assert list(names.values()) != ["Keys"]

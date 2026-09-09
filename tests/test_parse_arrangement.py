@@ -6,6 +6,7 @@ fallback paths for missing or unusable phrase metadata) and the
 <arrangementProperties> flag parsing for smart naming.
 """
 
+import json
 import math
 
 from song import parse_arrangement
@@ -703,3 +704,117 @@ def test_cent_offset_non_finite_sanitized_through_wire(tmp_path):
     # corrupt sloppak JSON) is coerced to 0.0 on the way back in.
     arr = arrangement_from_wire({"centOffset": float("nan")})
     assert arr.cent_offset == 0.0
+
+
+def test_parse_single_level_keeps_negative_time_anchor(tmp_path):
+    # A negative `audio_offset` (autosync compensating for audio pre-roll)
+    # shifts every chart event earlier, including the seed anchor gp2rs/
+    # gp2rs_gpx writes at time=audio_offset. The single-level flat merge
+    # used to clip to [0.0, inf), silently bisecting this anchor out.
+    xml = (
+        "<song>"
+        + _TUNING_AND_TEMPLATES
+        + '<levels count="1">'
+        + '<level difficulty="0">'
+        + '<notes count="0"/><chords count="0"/>'
+        + '<anchors count="2">'
+        + '<anchor time="-5" fret="1" width="4"/>'
+        + '<anchor time="10" fret="6" width="4"/>'
+        + "</anchors>"
+        + '<handShapes count="0"/>'
+        + "</level></levels>"
+        + "</song>"
+    )
+    arr = parse_arrangement(_write_xml(tmp_path, xml))
+    assert [a.time for a in arr.anchors] == [-5.0, 10.0]
+    assert arr.anchors[0].fret == 1
+
+
+def test_parse_first_phrase_iteration_keeps_negative_time_anchor(tmp_path):
+    # Phrase path: the first <phraseIteration> starts at time="0" (as real
+    # GP-derived phrase-aware sources author it), but a negative
+    # audio_offset can still shift the seed anchor before zero. Only the
+    # FIRST iteration's window should reach down to -inf to catch it —
+    # verified by also checking the second phrase's window still starts
+    # exactly at its own authored time (no overlap / duplicate events).
+    # Two levels so this actually takes the per-phrase merge branch (a
+    # single <level> would hit the single-level shortcut above instead,
+    # never reaching phraseIterations at all). maxDifficulty=0 below means
+    # only the diff-0 tier's slice is used.
+    xml = (
+        "<song>"
+        + _TUNING_AND_TEMPLATES
+        + '<levels count="2">'
+        + '<level difficulty="0">'
+        + '<notes count="2">'
+        + '<note time="-1" string="0" fret="0" sustain="0"/>'
+        + '<note time="2" string="0" fret="3" sustain="0"/>'
+        + "</notes>"
+        + '<chords count="0"/>'
+        + '<anchors count="2">'
+        + '<anchor time="-2" fret="1" width="4"/>'
+        + '<anchor time="1.5" fret="3" width="4"/>'
+        + "</anchors>"
+        + '<handShapes count="0"/>'
+        + "</level>"
+        + '<level difficulty="1">'
+        + '<notes count="0"/><chords count="0"/><anchors count="0"/><handShapes count="0"/>'
+        + "</level>"
+        + "</levels>"
+        + '<phrases><phrase maxDifficulty="0" name="a"/></phrases>'
+        + "<phraseIterations>"
+        + '<phraseIteration time="0" phraseId="0"/>'
+        + '<phraseIteration time="1.5" phraseId="0"/>'
+        + "</phraseIterations>"
+        + "</song>"
+    )
+    arr = parse_arrangement(_write_xml(tmp_path, xml))
+
+    assert arr.phrases is not None
+    assert len(arr.phrases) == 2
+    first_level = arr.phrases[0].levels[0]
+    assert [n.time for n in first_level.notes] == [-1.0]
+    assert [a.time for a in first_level.anchors] == [-2.0]
+    # Second iteration's window is unaffected — starts at its own time,
+    # not -inf, so it doesn't re-claim the first window's events.
+    second_level = arr.phrases[1].levels[0]
+    assert [a.time for a in second_level.anchors] == [1.5]
+    assert [n.time for n in second_level.notes] == [2.0]
+    # Flat max-mastery merge carries both windows' events through too.
+    assert [a.time for a in arr.anchors] == [-2.0, 1.5]
+    # Phrase.start_time must stay the iteration's own finite authored time
+    # (0.0 here) — NOT the -inf collection floor. -inf would serialize to
+    # the invalid JSON token -Infinity over the phrases WebSocket message,
+    # which JS JSON.parse rejects, dropping the whole message (mastery
+    # slider disabled / partial ladder on longer songs).
+    assert math.isfinite(arr.phrases[0].start_time)
+    assert arr.phrases[0].start_time == 0.0
+
+    from song import phrase_to_wire
+    wire = phrase_to_wire(arr.phrases[0])
+    assert json.loads(json.dumps(wire, allow_nan=False)) == wire
+
+
+def test_parse_best_level_fallback_keeps_negative_time_anchor(tmp_path):
+    # Same as above but through _collect_best_level_fallback (multiple
+    # levels, no usable phrase metadata to merge by).
+    xml = (
+        "<song>"
+        + _TUNING_AND_TEMPLATES
+        + '<levels count="2">'
+        + '<level difficulty="0">'
+        + '<notes count="0"/><chords count="0"/>'
+        + '<anchors count="1"><anchor time="-3" fret="1" width="4"/></anchors>'
+        + '<handShapes count="0"/>'
+        + "</level>"
+        + '<level difficulty="1">'
+        + '<notes count="1"><note time="0" string="0" fret="0"/></notes>'
+        + '<chords count="0"/>'
+        + '<anchors count="1"><anchor time="-3" fret="1" width="4"/></anchors>'
+        + '<handShapes count="0"/>'
+        + "</level>"
+        + "</levels>"
+        + "</song>"
+    )
+    arr = parse_arrangement(_write_xml(tmp_path, xml))
+    assert [a.time for a in arr.anchors] == [-3.0]
