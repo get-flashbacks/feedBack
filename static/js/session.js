@@ -741,13 +741,30 @@ export async function playSong(filename, arrangement, options) {
     // position with autostart suppressed. Matching on `filename` scopes the
     // preserve to the one call it actually belongs to; anything stale for a
     // different song falls through to the plain clear below.
+    //
+    // A filename match alone still isn't enough (feedBack#74 review): if
+    // THIS resume's own load is the one that stalls, a LATER *normal* play
+    // of the SAME filename — no resume intent at all — would also match on
+    // `f` and wrongly inherit the stale position. S._pendingResumeArmed is
+    // a one-shot gate resume-session.js sets right before its call: it is
+    // consumed (forced false) here the first time ANY playSong() call
+    // reads it, whether or not that call's filename matched, so it can
+    // only ever satisfy the single call it was armed for. The
+    // options.resume branch above doesn't rely on the gate at all (its own
+    // options survived intact), so it clears any stale gate defensively —
+    // otherwise a leftover `true` from an earlier stalled wrapped resume
+    // could combine with a LATER, unrelated wrapped resume of a
+    // coincidentally-matching filename and wrongly preserve.
     if (options && options.resume && Number(options.resume.position) > 0) {
         S.pendingResume = options.resume;
+        S._pendingResumeArmed = false;
         _pendingAutostart = false;
-    } else if (S.pendingResume && S.pendingResume.f === filename && Number(S.pendingResume.position) > 0) {
+    } else if (S.pendingResume && S._pendingResumeArmed && S.pendingResume.f === filename && Number(S.pendingResume.position) > 0) {
+        S._pendingResumeArmed = false;
         _pendingAutostart = false;
     } else {
         S.pendingResume = null;
+        S._pendingResumeArmed = false;
         _pendingAutostart = true;
     }
     _clearAutoExit();

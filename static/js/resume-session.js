@@ -110,8 +110,17 @@ export async function resumeLastSession() {
         // this one's saved position. playSong() only preserves a pre-armed
         // S.pendingResume when its `f` matches the filename actually being
         // loaded, so a stale tag for a different song is discarded instead.
+        //
+        // The filename tag alone still isn't enough: if THIS resume's own
+        // load stalls (never reaches song:ready), a later *normal* play of
+        // the SAME filename would also match on `f` and wrongly inherit the
+        // stale position. _pendingResumeArmed is a one-shot flag consumed
+        // by the very next playSong() call that reads it (matched or not)
+        // — see the comment in session.js's playSong() — so it can only
+        // ever gate the single call this arm was meant for.
         const resume = { position: Number(snap.t) || 0, speed: Number(snap.sp) || 1, f: snap.f };
         S.pendingResume = resume;
+        S._pendingResumeArmed = true;
         await window.playSong(snap.f, snap.a, { resume });
     } catch (err) {
         // A transient load/connect failure must not strand the user: keep the
