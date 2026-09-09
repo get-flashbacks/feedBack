@@ -101,6 +101,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the armed value with the resumed filename (`f`) and only preserving it in
   `playSong()` when that tag matches the filename actually being loaded;
   anything stale for a different song now falls through to a normal clear.
+- **The filename tag above still wasn't unique enough.** A bare filename
+  match let a stalled resume's stale position leak onto a *later, ordinary*
+  play of the *same* song (e.g. a plain library re-click with no resume
+  intent) — not just an unrelated one. Added `S._pendingResumeArmed`, a
+  one-shot gate set alongside the filename tag and consumed (forced false)
+  by the very first `playSong()` call that reads it, matched or not, so it
+  can only ever satisfy the single call it was armed for.
 - **A sloppak load failure at the highway websocket now always surfaces a
   clean `Failed to load sloppak` error instead of a raw exception message.**
   `sloppak_mod.load_song()` never returns `None` — every failure path (bad

@@ -225,4 +225,43 @@ test.describe('Resume last session', () => {
     const t = await page.evaluate(() => (document.getElementById('audio') as HTMLAudioElement).currentTime);
     expect(t).toBeLessThan(5);
   });
+
+  test('a resume whose chart never becomes ready does not leak its position onto a LATER normal play of the SAME song', async ({ page }) => {
+    // A stricter variant of the test above, catching a bug found in review
+    // of that fix: a bare filename match isn't unique enough. If a later
+    // play reuses the exact same filename as the stalled resume (a plain
+    // library re-click, no resume intent), the filename-only check would
+    // wrongly match and inherit the stale position. S._pendingResumeArmed
+    // is the one-shot gate that closes this: it's consumed by the first
+    // playSong() call that reads it, so it can't satisfy a second one.
+    await page.evaluate(() => {
+      class StuckWebSocket {
+        static CONNECTING = 0; static OPEN = 1; static CLOSING = 2; static CLOSED = 3;
+        readyState = StuckWebSocket.CONNECTING;
+        onopen = null; onmessage = null; onerror = null; onclose = null; url;
+        constructor(url) { this.url = url; }
+        send() {}
+        close() { this.readyState = StuckWebSocket.CLOSED; }
+      }
+      // @ts-ignore
+      window.WebSocket = StuckWebSocket;
+    });
+    await page.evaluate((k) => {
+      const snap = { f: 'mock-song.sloppak', a: 0, t: 30, sp: 1, title: 'Mock Song', ts: Date.now() };
+      localStorage.setItem(k, JSON.stringify(snap));
+    }, RESUME_KEY);
+
+    // Stalled resume of mock-song.sloppak — never reaches song:ready.
+    await page.evaluate(async () => { /* @ts-ignore */ await window.resumeLastSession(); });
+
+    // A later, ordinary play of the SAME filename — no resume intent.
+    await installMockSong(page);
+    await page.evaluate(async () => { /* @ts-ignore */ await window.playSong('mock-song.sloppak'); });
+    await page.waitForSelector('#player.active', { timeout: 5000 });
+    await expect(page.locator('#hud-title')).toHaveText('Mock Song', { timeout: 5000 });
+
+    // Must start from 0, not seek to the stalled resume's saved position of 30.
+    const t = await page.evaluate(() => (document.getElementById('audio') as HTMLAudioElement).currentTime);
+    expect(t).toBeLessThan(5);
+  });
 });

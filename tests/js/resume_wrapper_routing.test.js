@@ -29,6 +29,16 @@
 // else routed through window.playSong) and seek THAT song to the old one's
 // saved position with autostart suppressed.
 //
+// A THIRD bug, caught in review of the filename-tag fix: a bare filename
+// match isn't unique enough either. If THIS resume's own load is the one
+// that stalls, a LATER *normal* play of the SAME filename (no resume intent
+// at all — a plain library re-click) also matches on `f` and would wrongly
+// inherit the stale position. S._pendingResumeArmed is a one-shot gate:
+// resume-session.js sets it true in the same synchronous span as the arm,
+// and playSong() consumes it (forces it false) the first time ANY call
+// reads it — matched or not — so it can only ever satisfy the single call
+// it was armed for, never a later unrelated one.
+//
 // This can't be exercised as a headless unit test (playSong() is deeply coupled
 // to the DOM/audio element/highway instance) — the behavioral case lives in
 // tests/browser/resume-session.spec.ts's "...through a playSong wrapper that
@@ -62,13 +72,16 @@ test('resumeLastSession() pre-arms S.pendingResume, tagged with the resumed file
     );
 
     const armIdx = body.indexOf('S.pendingResume = resume;');
+    const gateIdx = body.indexOf('S._pendingResumeArmed = true;');
     const callIdx = body.indexOf('await window.playSong(snap.f, snap.a, { resume });');
     assert.ok(armIdx >= 0, 'resumeLastSession() must pre-arm S.pendingResume before calling window.playSong');
+    assert.ok(gateIdx >= 0, 'resumeLastSession() must set S._pendingResumeArmed = true — the one-shot gate '
+        + 'that stops a stale filename match from leaking onto a later, unrelated play of the same song');
     assert.ok(callIdx >= 0, 'resumeLastSession() must call window.playSong(snap.f, snap.a, { resume })');
     assert.ok(
-        armIdx < callIdx,
-        'S.pendingResume must be armed BEFORE the window.playSong call, not after — arming it after '
-        + 'the call is too late for a wrapper-forwarded invocation to see it',
+        armIdx < callIdx && gateIdx < callIdx,
+        'S.pendingResume and S._pendingResumeArmed must both be set BEFORE the window.playSong call, not '
+        + 'after — setting them after the call is too late for a wrapper-forwarded invocation to see them',
     );
 
     // No await between the two — an intervening await would give something else
@@ -91,23 +104,38 @@ test("session.js's playSong() preserves a pre-armed S.pendingResume instead of c
     // produce a false pass.
     const body = SESSION_JS.slice(fnStart, fnStart + 8000);
 
-    const optionsArmIdx = body.indexOf('S.pendingResume = options.resume;');
-    assert.ok(optionsArmIdx >= 0, 'playSong() must still arm S.pendingResume from options.resume when present');
-
-    const preserveMatch = body.match(/else if\s*\(\s*S\.pendingResume\s*&&\s*S\.pendingResume\.f\s*===\s*filename\s*&&\s*Number\(S\.pendingResume\.position\)\s*>\s*0\s*\)\s*\{([\s\S]*?)\}/);
+    const optionsArmMatch = body.match(/if\s*\(\s*options\s*&&\s*options\.resume[\s\S]*?\)\s*\{([\s\S]*?)\}\s*else if/);
+    assert.ok(optionsArmMatch, 'playSong() must have an `if (options && options.resume ...)` branch');
     assert.ok(
-        preserveMatch,
-        'playSong() must have an `else if (S.pendingResume && S.pendingResume.f === filename && ...)` '
-        + 'branch between the options.resume branch and the final else — preserving a pre-armed resume '
-        + 'request that a wrapper dropped from options, but ONLY when it is tagged for the filename '
-        + 'actually being loaded. Without the filename check, a pre-armed value left behind by a resume '
-        + 'whose chart never reached song:ready (so it was never consumed) would be wrongly inherited by '
-        + 'the next unrelated fresh play',
+        /S\.pendingResume\s*=\s*options\.resume;/.test(optionsArmMatch[1]),
+        'playSong() must still arm S.pendingResume from options.resume when present',
     );
     assert.ok(
-        !/S\.pendingResume\s*=/.test(preserveMatch[1]),
+        /S\._pendingResumeArmed\s*=\s*false;/.test(optionsArmMatch[1]),
+        'the options.resume branch must also clear S._pendingResumeArmed defensively — otherwise a stale '
+        + '`true` left by an earlier stalled wrapped resume could combine with a later, unrelated wrapped '
+        + 'resume of a coincidentally-matching filename and wrongly preserve',
+    );
+
+    const preserveMatch = body.match(/else if\s*\(\s*S\.pendingResume\s*&&\s*S\._pendingResumeArmed\s*&&\s*S\.pendingResume\.f\s*===\s*filename\s*&&\s*Number\(S\.pendingResume\.position\)\s*>\s*0\s*\)\s*\{([\s\S]*?)\}/);
+    assert.ok(
+        preserveMatch,
+        'playSong() must have an `else if (S.pendingResume && S._pendingResumeArmed && S.pendingResume.f '
+        + '=== filename && ...)` branch between the options.resume branch and the final else — preserving '
+        + 'a pre-armed resume request that a wrapper dropped from options, but ONLY when it is both tagged '
+        + 'for the filename actually being loaded AND the one-shot gate is still armed. Filename alone '
+        + 'isn\'t enough: without the gate, a resume whose chart never reached song:ready would leak its '
+        + 'stale position onto a LATER, unrelated normal play of the same filename',
+    );
+    assert.ok(
+        !/S\.pendingResume\s*=[^=]/.test(preserveMatch[1]),
         'the branch preserving a pre-armed S.pendingResume must not itself reassign it — that would '
         + 'defeat the whole point of preserving it',
+    );
+    assert.ok(
+        /S\._pendingResumeArmed\s*=\s*false;/.test(preserveMatch[1]),
+        'the preserve branch must consume the one-shot gate (set S._pendingResumeArmed = false) so it '
+        + 'can never satisfy a second, later call',
     );
 
     const finalElseMatch = body.match(/\}\s*else\s*\{\s*S\.pendingResume\s*=\s*null;/);
