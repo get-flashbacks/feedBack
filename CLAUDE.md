@@ -196,8 +196,11 @@ laggy" report turned out to be **three plugins doing per-frame `querySelectorAll
   instance's node. (notedetect #75 follow-up.)
 
 These are cheap to get right up front and expensive to retrofit. Profile the
-**main thread**, not the GPU, when a renderer "feels laggy" — the offender is
-usually an unrelated plugin's per-frame DOM work.
+**main thread** first, before blaming the renderer, when a renderer "feels
+laggy" — an unrelated plugin's per-frame DOM work is cheap to rule in or out
+on that thread, and it has been the real cause before (see the three-plugin
+`querySelectorAll` incident above). Don't jump to the GPU until the main
+thread is cleared.
 
 ### Visualization plugins — two complementary contracts
 
