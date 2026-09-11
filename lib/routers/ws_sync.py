@@ -29,6 +29,12 @@ Design points (full spec in the issue):
   discovery/typo-safety mechanism, not a secret, so this doesn't make guessing
   impossible, but it keeps a scan from being cheap on a LAN-exposed port. It
   does not protect against a distributed scan from many source addresses.
+  Keyed on `websocket.client.host` (the ASGI-layer peer address) with no
+  `X-Forwarded-For`/`X-Real-IP` trust: if feedBack is ever deployed behind a
+  reverse proxy that doesn't preserve the original client address at that
+  layer, every client behind the proxy shares one bucket. Fine for the
+  documented direct-LAN deployment; revisit if a supported proxy topology
+  needs real client-IP propagation.
 """
 
 import asyncio
@@ -58,9 +64,12 @@ RATE_BURST = 240.0  # token-bucket burst headroom
 # several devices behind the same NAT/proxy joining at once) while making a
 # room-key scan slow to run from a single address. Deliberately generous —
 # this is DoS/scan-cost hygiene, not the security boundary; see the module
-# docstring.
+# docstring. Burst is kept >= MAX_CLIENTS_PER_ROOM so a full room's worth of
+# near-simultaneous joins from one shared address (reverse proxy, NAT
+# hairpin, several local tabs) can't be rejected purely by this cap while
+# the room itself still has space.
 CONN_RATE_PER_SEC = 5.0
-CONN_BURST = 15.0
+CONN_BURST = 32.0
 # A peer that stops draining its socket would leave send_text() pending
 # forever — and since publishers await the fan-out gather, one stalled peer
 # would stall every publisher's receive loop behind it. Bounding the send
