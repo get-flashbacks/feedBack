@@ -28,8 +28,10 @@ from routers import ws_sync
 @pytest.fixture(autouse=True)
 def _clean_rooms():
     ws_sync._rooms.clear()
+    ws_sync._conn_buckets.clear()
     yield
     ws_sync._rooms.clear()
+    ws_sync._conn_buckets.clear()
 
 
 @pytest.fixture()
@@ -164,6 +166,34 @@ def test_rate_cap_closes_flooding_sender(client, monkeypatch):
         with client.websocket_connect("/ws/sync/ROOM10") as c:
             c.send_text("fresh-socket")
             assert b.receive_text() == "fresh-socket"
+
+
+def test_connection_rate_cap_closes_excess_attempts_from_same_ip(client, monkeypatch):
+    monkeypatch.setattr(ws_sync, "CONN_BURST", 2.0)
+    monkeypatch.setattr(ws_sync, "CONN_RATE_PER_SEC", 0.0)
+    # TestClient connects as a single fixed source IP, so all of these share
+    # one bucket — exactly the scenario the cap defends (one address trying
+    # many session ids quickly).
+    with client.websocket_connect("/ws/sync/SCAN001"):
+        pass
+    with client.websocket_connect("/ws/sync/SCAN002"):
+        pass
+    # Burst exhausted — the next attempt (any session id, valid or not) is
+    # rejected before session-id validation or room bookkeeping runs.
+    with client.websocket_connect("/ws/sync/SCAN003") as blocked:
+        _expect_close(blocked, 1013)
+    assert "SCAN003" not in ws_sync._rooms
+
+
+def test_connection_rate_cap_does_not_penalize_a_reconnecting_room(client, monkeypatch):
+    # A crash-recovery reconnect burst from the legitimate host must not be
+    # mistaken for a scan — sized comfortably under the default burst.
+    with client.websocket_connect("/ws/sync/ROOM12") as a:
+        a.send_text("still-fine")
+    with client.websocket_connect("/ws/sync/ROOM12") as b, \
+         client.websocket_connect("/ws/sync/ROOM12") as c:
+        b.send_text("reconnected")
+        assert c.receive_text() == "reconnected"
 
 
 class _StalledPeer:

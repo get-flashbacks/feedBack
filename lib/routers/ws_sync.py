@@ -24,6 +24,17 @@ Design points (full spec in the issue):
   total-room caps, and a per-socket inbound token-bucket rate cap. Over-limit
   sockets are closed with a policy code; the room carries on. A peer that dies
   mid-fan-out is dropped without wedging delivery to the rest.
+- A per-source-IP connection-attempt rate cap (feedBack-plugin-splitscreen#26)
+  bounds how fast one address can try session ids — the room key is a
+  discovery/typo-safety mechanism, not a secret, so this doesn't make guessing
+  impossible, but it keeps a scan from being cheap on a LAN-exposed port. It
+  does not protect against a distributed scan from many source addresses.
+  Keyed on `websocket.client.host` (the ASGI-layer peer address) with no
+  `X-Forwarded-For`/`X-Real-IP` trust: if feedBack is ever deployed behind a
+  reverse proxy that doesn't preserve the original client address at that
+  layer, every client behind the proxy shares one bucket. Fine for the
+  documented direct-LAN deployment; revisit if a supported proxy topology
+  needs real client-IP propagation.
 """
 
 import asyncio
@@ -48,6 +59,17 @@ MAX_CLIENTS_PER_ROOM = 16
 MAX_ROOMS = 32
 RATE_MSGS_PER_SEC = 120.0  # sustained inbound frames per socket
 RATE_BURST = 240.0  # token-bucket burst headroom
+# Per-source-IP connection-attempt cap: sized to comfortably allow a handful
+# of legitimate near-simultaneous joins (a host reconnecting after a crash,
+# several devices behind the same NAT/proxy joining at once) while making a
+# room-key scan slow to run from a single address. Deliberately generous —
+# this is DoS/scan-cost hygiene, not the security boundary; see the module
+# docstring. Burst is kept >= MAX_CLIENTS_PER_ROOM so a full room's worth of
+# near-simultaneous joins from one shared address (reverse proxy, NAT
+# hairpin, several local tabs) can't be rejected purely by this cap while
+# the room itself still has space.
+CONN_RATE_PER_SEC = 5.0
+CONN_BURST = 32.0
 # A peer that stops draining its socket would leave send_text() pending
 # forever — and since publishers await the fan-out gather, one stalled peer
 # would stall every publisher's receive loop behind it. Bounding the send
@@ -65,6 +87,35 @@ _WS_TRY_AGAIN_LATER = 1013  # room or server at capacity
 # interleave writes on a third socket's transport).
 _rooms: dict[str, dict[WebSocket, asyncio.Lock]] = {}
 
+# source IP → (tokens, last_refill_monotonic) for the connection-attempt cap.
+# Unbounded-growth note: entries are never evicted, so a very large number of
+# distinct source IPs over the server's lifetime would grow this dict — an
+# accepted tradeoff for a LAN-facing relay with a small expected client
+# population, matching this module's existing preference for simple
+# in-memory state (module-level, test/operator overridable) over a bounded
+# cache.
+_conn_buckets: dict[str, tuple[float, float]] = {}
+
+
+def _client_ip(websocket: WebSocket) -> str:
+    client = websocket.client
+    return client.host if client is not None else "unknown"
+
+
+def _conn_rate_allowed(ip: str) -> bool:
+    now = time.monotonic()
+    tokens, last_refill = _conn_buckets.get(ip, (CONN_BURST, now))
+    tokens = min(CONN_BURST, tokens + (now - last_refill) * CONN_RATE_PER_SEC)
+    # A rejected attempt must not itself consume a token — otherwise a
+    # reconnect burst against an already-empty bucket drives tokens further
+    # negative each try, extending the lockout well past CONN_BURST's
+    # intended recovery time instead of just waiting it out.
+    if tokens < 1.0:
+        _conn_buckets[ip] = (tokens, now)
+        return False
+    _conn_buckets[ip] = (tokens - 1.0, now)
+    return True
+
 
 async def _send_locked(peer: WebSocket, lock: asyncio.Lock, text: str) -> None:
     async with lock:
@@ -75,6 +126,10 @@ async def _send_locked(peer: WebSocket, lock: asyncio.Lock, text: str) -> None:
 async def sync_ws(websocket: WebSocket, session_id: str):
     """Join the fan-out room *session_id*; relay every inbound text frame."""
     await websocket.accept()
+
+    if not _conn_rate_allowed(_client_ip(websocket)):
+        await websocket.close(code=_WS_TRY_AGAIN_LATER, reason="connection rate exceeded")
+        return
 
     if not _SESSION_ID_RE.fullmatch(session_id):
         await websocket.close(code=_WS_POLICY_VIOLATION, reason="invalid session id")
