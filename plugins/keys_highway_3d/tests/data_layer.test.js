@@ -189,6 +189,92 @@ test('measureMarkers extracts idx/t pairs', () => {
     );
 });
 
+// ── Difficulty-ladder-aware notation filtering (feedBack#67) ───────────────
+
+test('filterNotationByMastery: returns the same array reference when there is no phrase data', () => {
+    const { filterNotationByMastery } = load();
+    const notes = [{ midi: 60, t: 0 }, { midi: 62, t: 1 }];
+    assert.equal(filterNotationByMastery(notes, [], [{ t: 0 }], []), notes);
+    assert.equal(filterNotationByMastery(notes, null, [{ t: 0 }], []), notes);
+});
+
+test('filterNotationByMastery: returns the same array reference when the tab has no filtered content at all', () => {
+    const { filterNotationByMastery } = load();
+    const notes = [{ midi: 60, t: 0 }];
+    const phrases = [{ start_time: 0, end_time: 10, max_difficulty: 3 }];
+    assert.equal(filterNotationByMastery(notes, phrases, null, undefined), notes);
+});
+
+test('filterNotationByMastery: drops notation onsets inside a phrase the tab filtered to empty', () => {
+    const { filterNotationByMastery } = load();
+    const notes = [
+        { midi: 60, t: 0.5 },  // inside phrase A (0..5) — A has no filtered tab content
+        { midi: 62, t: 5.5 },  // inside phrase B (5..10) — B has filtered tab content
+    ];
+    const phrases = [
+        { start_time: 0, end_time: 5, max_difficulty: 3 },
+        { start_time: 5, end_time: 10, max_difficulty: 3 },
+    ];
+    const tabNotes = [{ t: 6.0 }]; // only in phrase B's window
+    const out = filterNotationByMastery(notes, phrases, tabNotes, []);
+    assert.deepEqual(out.map(n => n.midi), [62]);
+});
+
+test('filterNotationByMastery: a boundary-crossing measure keeps only the events whose OWN onset is playable', () => {
+    // Simulates one notation measure spanning two phrases — filtering is
+    // per-onset, so the measure isn't deleted wholesale over one phrase.
+    const { filterNotationByMastery } = load();
+    const notes = [
+        { midi: 60, t: 3.9, measureIdx: 0 }, // phrase A (0..4) — playable
+        { midi: 62, t: 4.1, measureIdx: 0 }, // phrase B (4..8) — NOT playable
+    ];
+    const phrases = [
+        { start_time: 0, end_time: 4, max_difficulty: 2 },
+        { start_time: 4, end_time: 8, max_difficulty: 2 },
+    ];
+    const tabNotes = [{ t: 1.0 }]; // only phrase A has filtered content
+    const out = filterNotationByMastery(notes, phrases, tabNotes, []);
+    assert.deepEqual(out.map(n => n.midi), [60]);
+});
+
+test('filterNotationByMastery: chord onsets (not just notes) count toward phrase playability', () => {
+    const { filterNotationByMastery } = load();
+    const notes = [{ midi: 60, t: 2 }];
+    const phrases = [{ start_time: 0, end_time: 5, max_difficulty: 1 }];
+    const out = filterNotationByMastery(notes, phrases, [], [{ t: 4.9 }]);
+    assert.deepEqual(out.map(n => n.midi), [60]);
+});
+
+test('filterNotationByMastery: an onset outside every phrase window fails OPEN (kept)', () => {
+    const { filterNotationByMastery } = load();
+    const notes = [{ midi: 60, t: 99 }]; // no phrase covers this
+    const phrases = [{ start_time: 0, end_time: 5, max_difficulty: 1 }];
+    const out = filterNotationByMastery(notes, phrases, [{ t: 1 }], []);
+    assert.deepEqual(out.map(n => n.midi), [60]);
+});
+
+test('filterNotationByMastery: half-open windows — an onset exactly at end_time belongs to the NEXT phrase', () => {
+    const { filterNotationByMastery } = load();
+    const notes = [{ midi: 60, t: 5 }]; // exactly phrase A's end_time / phrase B's start_time
+    const phrases = [
+        { start_time: 0, end_time: 5, max_difficulty: 1 },  // empty at current mastery
+        { start_time: 5, end_time: 10, max_difficulty: 1 }, // has content
+    ];
+    const out = filterNotationByMastery(notes, phrases, [{ t: 5 }], []);
+    assert.deepEqual(out.map(n => n.midi), [60]); // attributed to phrase B, which is playable
+});
+
+test('filterNotationByMastery: unsorted phrase input is handled (sorted internally)', () => {
+    const { filterNotationByMastery } = load();
+    const notes = [{ midi: 60, t: 6 }, { midi: 61, t: 1 }];
+    const phrasesOutOfOrder = [
+        { start_time: 5, end_time: 10, max_difficulty: 1 }, // has content
+        { start_time: 0, end_time: 5, max_difficulty: 1 },  // empty
+    ];
+    const out = filterNotationByMastery(notes, phrasesOutOfOrder, [{ t: 7 }], []);
+    assert.deepEqual(out.map(n => n.midi), [60]);
+});
+
 test('_pickMidiTarget: no plugin-local pick defers to the domain-wide selection, not "first device"', () => {
     const { _pickMidiTarget } = load();
     const inputs = [
