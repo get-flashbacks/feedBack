@@ -3643,7 +3643,15 @@
                 };
                 _lastMasteryApplied = null; // force a recompute on next draw()
                 buildKeyboardAndHighway();
-                buildNoteMeshes();
+                // Skip building meshes for the full note list when phrase
+                // data exists — _maybeApplyMasteryFilter's first-draw
+                // recompute (forced by _lastMasteryApplied = null above)
+                // always rebuilds them with the filtered subset immediately
+                // after, so a load-time build here would be pure waste (one
+                // Mesh + Sprite + Material per note, discarded a frame
+                // later). A fixed-difficulty chart has no such follow-up
+                // rebuild, so it still needs this one. Pullfrog review, PR #77.
+                if (!_notation.phrases.length) buildNoteMeshes();
                 buildMarkerSprites();
                 // Finalize the OUTGOING run before we clobber its scoring
                 // state. The host may emit song:loaded for the next song
