@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Added a per-source-IP connection-attempt rate cap to the `/ws/sync/{session_id}` relay** (feedBack-plugin-splitscreen#26). The relay already rate-caps inbound *messages* per connected socket, but had no cap on how fast one address could open new connection attempts — meaning a scan for a valid LAN-share room key wasn't rate-limited. Added a token-bucket cap (5/sec sustained, burst 15) in `lib/routers/ws_sync.py`, checked before session-id validation. This is DoS/scan-cost hygiene, not a real authentication boundary — the room key remains a discovery mechanism, not a secret, consistent with the app's overall trusted-network design (see splitscreen#24).
 - **Fixed stored XSS in the retune modal.** `retuneSong()` injected
   `title`/`target`/`msg.filename`/`msg.error` into a modal's `innerHTML` via
   unescaped template literals. `song.title` is attacker-influenceable

@@ -24,6 +24,11 @@ Design points (full spec in the issue):
   total-room caps, and a per-socket inbound token-bucket rate cap. Over-limit
   sockets are closed with a policy code; the room carries on. A peer that dies
   mid-fan-out is dropped without wedging delivery to the rest.
+- A per-source-IP connection-attempt rate cap (feedBack-plugin-splitscreen#26)
+  bounds how fast one address can try session ids — the room key is a
+  discovery/typo-safety mechanism, not a secret, so this doesn't make guessing
+  impossible, but it keeps a scan from being cheap on a LAN-exposed port. It
+  does not protect against a distributed scan from many source addresses.
 """
 
 import asyncio
@@ -48,6 +53,14 @@ MAX_CLIENTS_PER_ROOM = 16
 MAX_ROOMS = 32
 RATE_MSGS_PER_SEC = 120.0  # sustained inbound frames per socket
 RATE_BURST = 240.0  # token-bucket burst headroom
+# Per-source-IP connection-attempt cap: sized to comfortably allow a handful
+# of legitimate near-simultaneous joins (a host reconnecting after a crash,
+# several devices behind the same NAT/proxy joining at once) while making a
+# room-key scan slow to run from a single address. Deliberately generous —
+# this is DoS/scan-cost hygiene, not the security boundary; see the module
+# docstring.
+CONN_RATE_PER_SEC = 5.0
+CONN_BURST = 15.0
 # A peer that stops draining its socket would leave send_text() pending
 # forever — and since publishers await the fan-out gather, one stalled peer
 # would stall every publisher's receive loop behind it. Bounding the send
@@ -65,6 +78,29 @@ _WS_TRY_AGAIN_LATER = 1013  # room or server at capacity
 # interleave writes on a third socket's transport).
 _rooms: dict[str, dict[WebSocket, asyncio.Lock]] = {}
 
+# source IP → (tokens, last_refill_monotonic) for the connection-attempt cap.
+# Unbounded-growth note: entries are never evicted, so a very large number of
+# distinct source IPs over the server's lifetime would grow this dict — an
+# accepted tradeoff for a LAN-facing relay with a small expected client
+# population, matching this module's existing preference for simple
+# in-memory state (module-level, test/operator overridable) over a bounded
+# cache.
+_conn_buckets: dict[str, tuple[float, float]] = {}
+
+
+def _client_ip(websocket: WebSocket) -> str:
+    client = websocket.client
+    return client.host if client is not None else "unknown"
+
+
+def _conn_rate_allowed(ip: str) -> bool:
+    now = time.monotonic()
+    tokens, last_refill = _conn_buckets.get(ip, (CONN_BURST, now))
+    tokens = min(CONN_BURST, tokens + (now - last_refill) * CONN_RATE_PER_SEC)
+    tokens -= 1.0
+    _conn_buckets[ip] = (tokens, now)
+    return tokens >= 0
+
 
 async def _send_locked(peer: WebSocket, lock: asyncio.Lock, text: str) -> None:
     async with lock:
@@ -75,6 +111,10 @@ async def _send_locked(peer: WebSocket, lock: asyncio.Lock, text: str) -> None:
 async def sync_ws(websocket: WebSocket, session_id: str):
     """Join the fan-out room *session_id*; relay every inbound text frame."""
     await websocket.accept()
+
+    if not _conn_rate_allowed(_client_ip(websocket)):
+        await websocket.close(code=_WS_TRY_AGAIN_LATER, reason="connection rate exceeded")
+        return
 
     if not _SESSION_ID_RE.fullmatch(session_id):
         await websocket.close(code=_WS_POLICY_VIOLATION, reason="invalid session id")
