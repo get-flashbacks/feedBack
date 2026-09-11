@@ -153,3 +153,95 @@ def test_profile_wrong_typed_fields_are_400(client):
 def test_avatar_upload_non_string_image_is_400(client):
     assert client.post("/api/profile/avatar", json={"image": 123}).status_code == 400
     assert client.post("/api/profile/avatar", json={"image": []}).status_code == 400
+
+
+# ── Multiple profiles (feedBack#swap-profiles) ───────────────────────────────
+
+def test_fresh_install_has_one_profile(client):
+    profiles = client.get("/api/profiles").json()["profiles"]
+    assert len(profiles) == 1
+    assert profiles[0]["id"] == 1
+    assert profiles[0]["active"] is True
+
+
+def test_create_and_activate_profile(client):
+    client.post("/api/profile", json={"display_name": "Alice"})
+    r = client.post("/api/profiles", json={"display_name": "Bob"})
+    assert r.status_code == 200
+    bob = r.json()["created"]
+    assert bob["display_name"] == "Bob"
+    assert bob["active"] is False
+
+    profiles = client.get("/api/profiles").json()["profiles"]
+    assert {p["id"] for p in profiles} == {1, bob["id"]}
+    assert [p["active"] for p in profiles if p["id"] == 1] == [True]
+
+    r2 = client.post(f"/api/profiles/{bob['id']}/activate")
+    assert r2.status_code == 200
+    profiles = r2.json()["profiles"]
+    assert next(p for p in profiles if p["id"] == bob["id"])["active"] is True
+    assert next(p for p in profiles if p["id"] == 1)["active"] is False
+    # /api/profile now reads Bob, not the profile-1 identity set above.
+    assert client.get("/api/profile").json()["display_name"] == "Bob"
+
+
+def test_activate_unknown_profile_is_404(client):
+    assert client.post("/api/profiles/999/activate").status_code == 404
+
+
+@pytest.mark.parametrize("name", ["", " ", "x" * 33])
+def test_create_profile_rejects_bad_name(client, name):
+    assert client.post("/api/profiles", json={"display_name": name}).status_code == 400
+
+
+def test_profile_data_isolated_across_switch(client, server):
+    """Identity, XP, and song stats for profile A must be invisible from
+    profile B, and untouched by switching back and forth."""
+    from xp import xp_for_run
+
+    server.meta_db.put("songA.xml", 0, 0, {})  # register in the library, or
+    # /api/stats/best hides it regardless of profile (dead-song filter).
+    client.post("/api/profile", json={"display_name": "Alice"})
+    client.post("/api/xp/award", json={"source": "song_play", "amount": xp_for_run(250)})
+    stats1 = client.post("/api/stats", json={"filename": "songA.xml", "arrangement": 0,
+                                             "score": 9000, "accuracy": 0.9})
+    assert stats1.status_code == 200
+    alice_xp = client.get("/api/profile/progress").json()["xp"]
+    assert alice_xp > 0
+
+    bob = client.post("/api/profiles", json={"display_name": "Bob"}).json()["created"]
+    client.post(f"/api/profiles/{bob['id']}/activate")
+
+    assert client.get("/api/profile").json()["display_name"] == "Bob"
+    assert client.get("/api/profile/progress").json()["xp"] == 0
+    assert client.get("/api/stats/best").json() == {}
+
+    client.post("/api/profiles/1/activate")
+    assert client.get("/api/profile").json()["display_name"] == "Alice"
+    assert client.get("/api/profile/progress").json()["xp"] == alice_xp
+    assert client.get("/api/stats/best").json() == {"songA.xml": pytest.approx(0.9)}
+
+
+def test_delete_active_profile_is_rejected(client):
+    client.post("/api/profiles", json={"display_name": "Bob"})
+    r = client.delete("/api/profiles/1")  # profile 1 is still active
+    assert r.status_code == 400
+
+
+def test_delete_only_remaining_profile_is_rejected(client):
+    # Only profile 1 exists — deleting it would leave zero profiles.
+    assert client.delete("/api/profiles/1").status_code == 400
+
+
+def test_delete_profile_removes_its_data(client):
+    client.post("/api/profile", json={"display_name": "Alice"})
+    bob = client.post("/api/profiles", json={"display_name": "Bob"}).json()["created"]
+    client.post(f"/api/profiles/{bob['id']}/activate")
+    client.post("/api/xp/award", json={"amount": 50})
+    client.post("/api/profiles/1/activate")
+
+    r = client.delete(f"/api/profiles/{bob['id']}")
+    assert r.status_code == 200
+    profiles = r.json()["profiles"]
+    assert {p["id"] for p in profiles} == {1}
+    assert client.post(f"/api/profiles/{bob['id']}/activate").status_code == 404
