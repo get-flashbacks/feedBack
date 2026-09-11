@@ -504,6 +504,83 @@
         return out;
     }
 
+    // Difficulty-ladder-aware notation filtering (feedBack#67).
+    //
+    // Notation measures carry no per-note/per-phrase difficulty tag of their
+    // own — staff notation and the tab/gameplay note stream are structurally
+    // separate representations (see feedback-plugin-difficulty-ladder#90).
+    // So there is nothing to "select a level" from on the notation side.
+    // Instead: the chart's phrase windows (streamed on this plugin's own
+    // `/ws/highway` connection alongside `notation_measures` — see
+    // fetchNotation) are correlated against the render bundle's ALREADY
+    // mastery-filtered tab content (`bundle.notes` / `bundle.chords`) — this
+    // plugin never reimplements the host's tier-selection formula, it just
+    // asks what the host already decided. A phrase is "playable" at the
+    // current mastery when the tab has any filtered note/chord within that
+    // phrase's time window; a flattened notation event is kept when its
+    // onset falls inside a playable phrase. Phrases are treated as
+    // contiguous, non-overlapping, half-open `[start_time, end_time)`
+    // windows, matching the ladder generator's own `t0 <= event.time < t1`
+    // grouping. An onset outside every phrase window (should not normally
+    // happen once any phrase data exists, but the array could in principle
+    // not cover the full song) fails OPEN — kept, not dropped — so a gap in
+    // phrase coverage can only ever show MORE notation, never silently hide
+    // a passage.
+
+    // Binary-search the phrase (sorted by start_time, non-overlapping) whose
+    // half-open window contains `t`. Returns the phrase or null.
+    function _phraseContaining(sortedPhrases, t) {
+        let lo = 0, hi = sortedPhrases.length - 1, ans = -1;
+        while (lo <= hi) {
+            const mid = (lo + hi) >> 1;
+            if (sortedPhrases[mid].start_time <= t) { ans = mid; lo = mid + 1; }
+            else hi = mid - 1;
+        }
+        if (ans === -1) return null;
+        const p = sortedPhrases[ans];
+        return t < p.end_time ? p : null;
+    }
+
+    // Does the tab's CURRENT mastery-filtered content have any note/chord
+    // onset inside `[phrase.start_time, phrase.end_time)`? filteredNotes /
+    // filteredChords are already the host's per-phrase-level selection —
+    // this only asks whether that selection left anything in this window.
+    function _phraseHasFilteredContent(phrase, filteredNotes, filteredChords) {
+        const inWindow = (t) => t >= phrase.start_time && t < phrase.end_time;
+        if (Array.isArray(filteredNotes)) {
+            for (const n of filteredNotes) if (n && inWindow(Number(n.t))) return true;
+        }
+        if (Array.isArray(filteredChords)) {
+            for (const c of filteredChords) if (c && inWindow(Number(c.t))) return true;
+        }
+        return false;
+    }
+
+    // Filter a flattened notation note list (from flattenNotation) down to
+    // the notes whose onset falls in a currently-playable phrase.
+    // `phrases` is this song's `[{start_time, end_time, max_difficulty}]`
+    // (or null/empty — a fixed-difficulty chart with no ladder data);
+    // `tabNotes`/`tabChords` are the render bundle's mastery-filtered arrays
+    // (`bundle.notes`/`bundle.chords`). Returns `notes` UNCHANGED (same
+    // array reference) whenever there is no phrase data to filter by, so a
+    // fixed-difficulty chart behaves exactly as before feedBack#67.
+    function filterNotationByMastery(notes, phrases, tabNotes, tabChords) {
+        if (!Array.isArray(phrases) || phrases.length === 0) return notes;
+        if (!Array.isArray(tabNotes) && !Array.isArray(tabChords)) return notes;
+        const sorted = phrases.slice().sort((a, b) => a.start_time - b.start_time);
+        const playableCache = new Map(); // phrase object → bool, computed once per call
+        return notes.filter((n) => {
+            const phrase = _phraseContaining(sorted, n.t);
+            if (!phrase) return true; // no covering phrase — fail open
+            let playable = playableCache.get(phrase);
+            if (playable === undefined) {
+                playable = _phraseHasFilteredContent(phrase, tabNotes, tabChords);
+                playableCache.set(phrase, playable);
+            }
+            return playable;
+        });
+    }
+
     // Letter printed on a key top (C, C#, D, …) — pure.
     function noteLetter(midi) {
         return NOTE_NAMES[((midi % 12) + 12) % 12];
@@ -594,10 +671,23 @@
      *  Notation fetch — private per-instance WS (Staff View pattern)
      * ====================================================================== */
 
+    // Resolves `{ info, measures, phrases }`. `phrases` is the chart's
+    // difficulty-ladder windows (feedBack#67) — chunked like
+    // `notation_measures`, optional, and only present when the chart
+    // carries phrase-level difficulty data. Because `phrases` streams near
+    // the END of the WS protocol (after notes/chords, right before `ready`
+    // — see CLAUDE.md's WebSocket Protocol Reference), this waits for the
+    // `ready` message rather than finishing as soon as the notation block
+    // itself is complete (previously: as soon as `anchors` arrived, which
+    // is well before phrases could ever have streamed). The one exception
+    // is `notation_info.total === 0`: no notation measures means nothing to
+    // filter by phrase difficulty either, so there's no reason to keep the
+    // socket open for the rest of the song's data in that case.
     function fetchNotation(filename, arrangementIndex) {
         return new Promise((resolve, reject) => {
             let info = null;
             const measures = [];
+            const phrases = [];
             const url = (location.protocol === 'https:' ? 'wss://' : 'ws://')
                 + location.host + '/ws/highway/' + encodeURIComponent(filename)
                 + '?arrangement=' + encodeURIComponent(arrangementIndex);
@@ -614,7 +704,7 @@
                 settled = true;
                 clearTimeout(timer);
                 try { ws.close(); } catch (_) {}
-                resolve({ info, measures });
+                resolve({ info, measures, phrases });
             };
             ws.onmessage = (ev) => {
                 let msg = null;
@@ -641,12 +731,16 @@
                 }
                 if (msg.type === 'notation_measures') {
                     for (const m of Array.isArray(msg.data) ? msg.data : []) measures.push(m);
-                    if (info && measures.length >= (Number(msg.total) || 0)) finish();
                     return;
                 }
-                // `anchors` streams right after the notation block — if we see
-                // it, the notation section is over regardless of count.
-                if (msg.type === 'anchors' && info) finish();
+                if (msg.type === 'phrases') {
+                    for (const p of Array.isArray(msg.data) ? msg.data : []) phrases.push(p);
+                    return;
+                }
+                // `ready` is the WS protocol's sole guaranteed terminal signal
+                // — every optional message this chart carries (phrases
+                // included) has already streamed by the time it fires.
+                if (msg.type === 'ready' && info) finish();
             };
             ws.onerror = () => {
                 if (settled) return;
@@ -1701,7 +1795,11 @@
         let markerSprites = []; // [{sprite, t}]
         let keyMeshes = new Map(); // midi → mesh
         let _isReady = false;
-        let _notation = null;  // {notes, range, markers}
+        let _notation = null;  // {notes, range, markers, phrases, playable}
+        // Mastery fraction (0..1) `_notation.playable` was last computed
+        // against — `null` forces a recompute on the first draw() after a
+        // chart loads. feedBack#67.
+        let _lastMasteryApplied = null;
         let _loadSeq = 0;
         let _songHandler = null;
         // Per-chart geometry/material caches. One bevelled geometry per
@@ -3061,7 +3159,9 @@
             noteMeshes = [];
             const range = _notation.range;
             const { layout, whiteCount } = keyLayout(range);
-            for (const note of _notation.notes) {
+            // Mastery-filtered subset (feedBack#67) — falls back to every
+            // note when the chart has no phrase-level difficulty data.
+            for (const note of _notation.playable) {
                 const entry = layout.get(note.midi);
                 if (!entry) continue;
                 const len = Math.max(4 * K, note.durSec * TS);
@@ -3192,8 +3292,10 @@
         /* ── Hit detection / scoring (piano _checkHit port) ───────────── */
 
         function _checkHit(playedMidi, t) {
-            if (!_notation || !_notation.notes.length) return;
-            const key = judgeHit(_notation.notes, playedMidi, t, _hitNoteKeys, HIT_TOLERANCE_S);
+            // Score against the mastery-filtered subset (feedBack#67) — a
+            // note hidden by the current mastery level isn't expected play.
+            if (!_notation || !_notation.playable.length) return;
+            const key = judgeHit(_notation.playable, playedMidi, t, _hitNoteKeys, HIT_TOLERANCE_S);
             const wall = performance.now();
             if (key) {
                 _hitNoteKeys.add(key);
@@ -3503,7 +3605,7 @@
                     _midiJustConnected = false;
                 }
                 const swept = sweepMissed(
-                    _notation.notes, now, _hitNoteKeys, _missedNoteKeys,
+                    _notation.playable, now, _hitNoteKeys, _missedNoteKeys,
                     HIT_TOLERANCE_S, _missFloor, _onSweptMiss, _sweepCursor,
                 );
                 if (swept) { _misses += swept; _streak = 0; }
@@ -3516,16 +3618,40 @@
             if (!song || !song.filename) return;
             const seq = ++_loadSeq;
             try {
-                const { measures } = await fetchNotation(song.filename, song.arrangementIndex != null ? song.arrangementIndex : -1);
+                const { measures, phrases } = await fetchNotation(song.filename, song.arrangementIndex != null ? song.arrangementIndex : -1);
                 if (seq !== _loadSeq || !_isReady) return; // superseded / torn down
                 const notes = flattenNotation(measures);
                 _notation = {
                     notes,
                     range: keyRange(notes),
                     markers: measureMarkers(measures),
+                    // Difficulty-ladder windows for this arrangement, or []
+                    // for a fixed-difficulty chart (feedBack#67). Sorted
+                    // once here by start_time — static for the life of this
+                    // chart, so there's no reason to re-sort it on every
+                    // mastery change (filterNotationByMastery still sorts
+                    // defensively too, cheap on already-sorted input, since
+                    // it's a pure function other callers may feed unsorted
+                    // data to).
+                    phrases: Array.isArray(phrases)
+                        ? phrases.slice().sort((a, b) => a.start_time - b.start_time) : [],
+                    // Mastery-filtered subset actually rendered/scored.
+                    // Starts as the full list; _maybeApplyMasteryFilter()
+                    // (called every draw()) narrows it once bundle.notes/
+                    // bundle.chords are available and mastery is known.
+                    playable: notes,
                 };
+                _lastMasteryApplied = null; // force a recompute on next draw()
                 buildKeyboardAndHighway();
-                buildNoteMeshes();
+                // Skip building meshes for the full note list when phrase
+                // data exists — _maybeApplyMasteryFilter's first-draw
+                // recompute (forced by _lastMasteryApplied = null above)
+                // always rebuilds them with the filtered subset immediately
+                // after, so a load-time build here would be pure waste (one
+                // Mesh + Sprite + Material per note, discarded a frame
+                // later). A fixed-difficulty chart has no such follow-up
+                // rebuild, so it still needs this one. Pullfrog review, PR #77.
+                if (!_notation.phrases.length) buildNoteMeshes();
                 buildMarkerSprites();
                 // Finalize the OUTGOING run before we clobber its scoring
                 // state. The host may emit song:loaded for the next song
@@ -3552,6 +3678,40 @@
                 console.error('[Keys-Hwy3D] notation load failed:', e);
                 _emitDomain('renderer-failed', { providerId: 'keys_highway_3d', reason: 'notation load failed' });
             }
+        }
+
+        // Recompute `_notation.playable` when the mastery slider moves
+        // (feedBack#67). Cheap to call every draw(): a no-op unless the
+        // chart has phrase data AND `bundle.mastery` actually changed since
+        // the last recompute (a plain number comparison — the real work
+        // only runs on a genuine mastery change, which is a rare,
+        // user-driven event, not a per-frame one). Rebuilding note meshes
+        // and resetting scoring on every call would be wasteful and is
+        // exactly what the equality check above avoids.
+        function _maybeApplyMasteryFilter(bundle) {
+            if (!_notation || !bundle) return;
+            if (!_notation.phrases.length) return; // fixed-difficulty chart — nothing to do
+            const mastery = Number(bundle.mastery);
+            if (!Number.isFinite(mastery) || mastery === _lastMasteryApplied) return;
+            const tabNotes = bundle.notes, tabChords = bundle.chords;
+            // Tab data isn't populated on this bundle yet (e.g. an early
+            // frame). filterNotationByMastery would fall through to the
+            // full, unfiltered list in this case — caching `mastery` as
+            // "applied" here would then permanently skip every later
+            // recompute for the rest of the session, since the mastery
+            // value itself won't change again on its own. Leave the cache
+            // untouched so this cheap check retries on the next draw().
+            if (!Array.isArray(tabNotes) && !Array.isArray(tabChords)) return;
+            _lastMasteryApplied = mastery;
+            _notation.playable = filterNotationByMastery(
+                _notation.notes, _notation.phrases, tabNotes, tabChords);
+            buildNoteMeshes();
+            // The old playable set's indices/entries no longer line up with
+            // the new one — a stale _sweepCursor position or a "hit" keyed
+            // to a note that just got filtered out would misbehave. This
+            // mirrors the same reset loadNotationForCurrentSong already
+            // does for a fresh chart load.
+            _resetScoring();
         }
 
         // Per-song note-detection binding: close the previous one, register
@@ -3815,6 +3975,7 @@
             _keyFlash.clear();
             _releaseAllHeld();
             _notation = null;
+            _lastMasteryApplied = null;
             _isReady = false;
         }
 
@@ -3972,7 +4133,10 @@
                     }
                 }
                 const now = (bundle && typeof bundle.currentTime === 'number') ? bundle.currentTime : 0;
-                if (_notation) updateScene(now);
+                if (_notation) {
+                    _maybeApplyMasteryFilter(bundle);
+                    updateScene(now);
+                }
                 _animateFeedback(performance.now());
                 // Wall-clock FX step (sparks, hit-line kick decay) —
                 // decoupled from song time so effects settle while paused.
@@ -4091,6 +4255,9 @@
         flattenNotation,
         keyRange,
         measureMarkers,
+        _phraseContaining,
+        _phraseHasFilteredContent,
+        filterNotationByMastery,
         noteLetter,
         scrollZ,
         noteKey,

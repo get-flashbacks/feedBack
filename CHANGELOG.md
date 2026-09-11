@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **keys_highway_3d now respects the mastery/difficulty slider** (#67). The plugin fetches `notation_measures` over its own private `/ws/highway` connection and never consulted the host's difficulty-filtered note stream, so lowering the mastery percentage had no visible effect — the highway always showed the full chart. Notation carries no per-note difficulty tag of its own (it's a structurally separate representation from the tab/gameplay note stream — see feedback-plugin-difficulty-ladder#90), so this correlates each flattened notation event's onset against the chart's phrase windows (now also streamed to this plugin, chunked like `notation_measures`) and the render bundle's ALREADY mastery-filtered tab content (`bundle.notes`/`bundle.chords`): a phrase is "playable" when the tab has any filtered note/chord in that phrase's `[start_time, end_time)` window, and a notation event is kept when its onset falls inside a playable phrase. Recomputes (and rebuilds note meshes + resets scoring) whenever `bundle.mastery` changes; a fixed-difficulty chart with no phrase data is unaffected.
+
 ### Changed
 
 - **highway_3d: chord diagram widget lingers longer before fading** (`plugins/highway_3d`). The floating chord-shape diagram was visible for only ~0.55s after a chord's onset, reported (against the wrong repo — `feedBack-plugin-fretboard`#2/#3) as "appears and disappears too quickly to read or form the shape." Roughly doubled to 1.1s. See #72 for the cross-repo mismatch this traces back to.
