@@ -3626,8 +3626,15 @@
                     range: keyRange(notes),
                     markers: measureMarkers(measures),
                     // Difficulty-ladder windows for this arrangement, or []
-                    // for a fixed-difficulty chart (feedBack#67).
-                    phrases: Array.isArray(phrases) ? phrases : [],
+                    // for a fixed-difficulty chart (feedBack#67). Sorted
+                    // once here by start_time — static for the life of this
+                    // chart, so there's no reason to re-sort it on every
+                    // mastery change (filterNotationByMastery still sorts
+                    // defensively too, cheap on already-sorted input, since
+                    // it's a pure function other callers may feed unsorted
+                    // data to).
+                    phrases: Array.isArray(phrases)
+                        ? phrases.slice().sort((a, b) => a.start_time - b.start_time) : [],
                     // Mastery-filtered subset actually rendered/scored.
                     // Starts as the full list; _maybeApplyMasteryFilter()
                     // (called every draw()) narrows it once bundle.notes/
@@ -3678,9 +3685,18 @@
             if (!_notation.phrases.length) return; // fixed-difficulty chart — nothing to do
             const mastery = Number(bundle.mastery);
             if (!Number.isFinite(mastery) || mastery === _lastMasteryApplied) return;
+            const tabNotes = bundle.notes, tabChords = bundle.chords;
+            // Tab data isn't populated on this bundle yet (e.g. an early
+            // frame). filterNotationByMastery would fall through to the
+            // full, unfiltered list in this case — caching `mastery` as
+            // "applied" here would then permanently skip every later
+            // recompute for the rest of the session, since the mastery
+            // value itself won't change again on its own. Leave the cache
+            // untouched so this cheap check retries on the next draw().
+            if (!Array.isArray(tabNotes) && !Array.isArray(tabChords)) return;
             _lastMasteryApplied = mastery;
             _notation.playable = filterNotationByMastery(
-                _notation.notes, _notation.phrases, bundle.notes, bundle.chords);
+                _notation.notes, _notation.phrases, tabNotes, tabChords);
             buildNoteMeshes();
             // The old playable set's indices/entries no longer line up with
             // the new one — a stale _sweepCursor position or a "hit" keyed
