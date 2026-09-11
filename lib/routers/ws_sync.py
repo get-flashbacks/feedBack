@@ -97,9 +97,15 @@ def _conn_rate_allowed(ip: str) -> bool:
     now = time.monotonic()
     tokens, last_refill = _conn_buckets.get(ip, (CONN_BURST, now))
     tokens = min(CONN_BURST, tokens + (now - last_refill) * CONN_RATE_PER_SEC)
-    tokens -= 1.0
-    _conn_buckets[ip] = (tokens, now)
-    return tokens >= 0
+    # A rejected attempt must not itself consume a token — otherwise a
+    # reconnect burst against an already-empty bucket drives tokens further
+    # negative each try, extending the lockout well past CONN_BURST's
+    # intended recovery time instead of just waiting it out.
+    if tokens < 1.0:
+        _conn_buckets[ip] = (tokens, now)
+        return False
+    _conn_buckets[ip] = (tokens - 1.0, now)
+    return True
 
 
 async def _send_locked(peer: WebSocket, lock: asyncio.Lock, text: str) -> None:
