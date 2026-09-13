@@ -1364,6 +1364,15 @@ def test_note_no_stroke_omits_pick_direction():
 # must attach to the ChordTemplate as `arp`, distinct from the per-note
 # pickDirection derived from the same field.
 
+def _arp_chord_beat():
+    """A fresh two-note chord beat (high e fret 3 + B fret 2) with no
+    stroke/pickStroke set — the shared starting point for the arpeggio tests
+    below, each of which sets `.stroke`/`.pickStroke` differently."""
+    note_e = _ct_note(guitarpro.NoteType.normal, gp_string=1, fret=3)
+    note_b = _ct_note(guitarpro.NoteType.normal, gp_string=2, fret=2)
+    return _ct_beat(tick=0, dur_value=4, notes=[note_e, note_b])
+
+
 def test_gp_beat_arpeggio_detector():
     assert _gp_beat_arpeggio(None) is False
     assert _gp_beat_arpeggio(SimpleNamespace(stroke=None, pickStroke=None)) is False
@@ -1386,9 +1395,7 @@ def test_chord_beat_with_stroke_marks_template_arpeggio():
     """A chord beat carrying `.stroke` emits `arp="1"` on its <chordTemplate>,
     and the chord notes still carry their own pickDirection — both signals
     coexist independently."""
-    note_e = _ct_note(guitarpro.NoteType.normal, gp_string=1, fret=3)
-    note_b = _ct_note(guitarpro.NoteType.normal, gp_string=2, fret=2)
-    beat = _ct_beat(tick=0, dur_value=4, notes=[note_e, note_b])
+    beat = _arp_chord_beat()
     beat.effect.stroke = SimpleNamespace(
         direction=guitarpro.BeatStrokeDirection.down, value=64)
 
@@ -1402,9 +1409,7 @@ def test_chord_beat_with_stroke_marks_template_arpeggio():
 
 def test_chord_beat_without_stroke_omits_arpeggio():
     """A plain chord strum (no .stroke) leaves `arp` unset — no fabricated flag."""
-    note_e = _ct_note(guitarpro.NoteType.normal, gp_string=1, fret=3)
-    note_b = _ct_note(guitarpro.NoteType.normal, gp_string=2, fret=2)
-    beat = _ct_beat(tick=0, dur_value=4, notes=[note_e, note_b])
+    beat = _arp_chord_beat()
 
     xml_str = convert_track(_ct_song([beat]), track_index=0)
     root = ET.fromstring(xml_str)  # noqa: S314
@@ -1415,9 +1420,7 @@ def test_chord_beat_without_stroke_omits_arpeggio():
 def test_chord_beat_with_only_pick_stroke_omits_arpeggio():
     """A bare `.pickStroke` (no `.stroke`) is a plain up/down strum, not an
     arpeggio — `arp` stays unset even though pickDirection is still derived."""
-    note_e = _ct_note(guitarpro.NoteType.normal, gp_string=1, fret=3)
-    note_b = _ct_note(guitarpro.NoteType.normal, gp_string=2, fret=2)
-    beat = _ct_beat(tick=0, dur_value=4, notes=[note_e, note_b])
+    beat = _arp_chord_beat()
     beat.effect.pickStroke = guitarpro.BeatStrokeDirection.up
 
     xml_str = convert_track(_ct_song([beat]), track_index=0)
@@ -1432,9 +1435,7 @@ def test_chord_beat_with_none_direction_stroke_omits_arpeggio():
     """A `.stroke` object present but carrying `BeatStrokeDirection.none`
     (attrs' default_factory always creates one) must not be mistaken for an
     authored arpeggio marker."""
-    note_e = _ct_note(guitarpro.NoteType.normal, gp_string=1, fret=3)
-    note_b = _ct_note(guitarpro.NoteType.normal, gp_string=2, fret=2)
-    beat = _ct_beat(tick=0, dur_value=4, notes=[note_e, note_b])
+    beat = _arp_chord_beat()
     beat.effect.stroke = SimpleNamespace(
         direction=guitarpro.BeatStrokeDirection.none, value=0)
 
@@ -1448,9 +1449,7 @@ def test_arpeggio_flag_survives_xml_to_wire_round_trip(tmp_path):
     """The `arp` attribute survives XML -> Arrangement -> wire, matching the
     already-implemented downstream consumer (feedpakr's derive_handshapes)."""
     from song import chord_template_to_wire, parse_arrangement
-    note_e = _ct_note(guitarpro.NoteType.normal, gp_string=1, fret=3)
-    note_b = _ct_note(guitarpro.NoteType.normal, gp_string=2, fret=2)
-    beat = _ct_beat(tick=0, dur_value=4, notes=[note_e, note_b])
+    beat = _arp_chord_beat()
     beat.effect.stroke = SimpleNamespace(
         direction=guitarpro.BeatStrokeDirection.down, value=64)
 
