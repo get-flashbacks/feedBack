@@ -10,12 +10,12 @@ See issue #46 (tempo math) and the GP repeat-expansion PR for the schedule
 walker.
 """
 
-import xml.etree.ElementTree as ET
 from types import SimpleNamespace
 from unittest import mock
 
 import guitarpro
 import pytest
+import safe_xml
 
 from gp2rs import (
     GP_TICKS_PER_QUARTER,
@@ -113,7 +113,7 @@ def _converter_ebeats(converter, numerator, denominator, tempo_changes=None):
         denominator=denominator,
         tempo_changes=tempo_changes,
     )
-    root = ET.fromstring(converter(song, 0))
+    root = safe_xml.safe_fromstring(converter(song, 0))
     ebeats = root.find("ebeats")
     assert ebeats is not None, "Converter output missing <ebeats> node"
     return ebeats
@@ -856,7 +856,7 @@ def test_tied_note_extends_sustain_not_duplicate():
     beat2 = _ct_beat(tick=GP_TICKS_PER_QUARTER, dur_value=4, notes=[note2])
 
     xml_str = convert_track(_ct_song([beat1, beat2]), track_index=0)
-    root = ET.fromstring(xml_str)  # noqa: S314
+    root = safe_xml.safe_fromstring(xml_str)
     notes = root.findall(".//notes/note")
 
     assert len(notes) == 1, f"tie must not emit a second note; got {len(notes)}"
@@ -871,7 +871,7 @@ def test_tied_note_without_predecessor_is_silently_dropped():
     beat = _ct_beat(tick=0, dur_value=4, notes=[note])
 
     xml_str = convert_track(_ct_song([beat]), track_index=0)
-    root = ET.fromstring(xml_str)  # noqa: S314
+    root = safe_xml.safe_fromstring(xml_str)
     notes = root.findall(".//notes/note")
     assert len(notes) == 0
 
@@ -919,7 +919,7 @@ def test_bent_note_imports_with_curve_through_wire():
     note.effect.bend = _ct_bend([(0, 0), (6, 4), (12, 0)])
     beat = _ct_beat(tick=0, dur_value=4, notes=[note])
 
-    root = ET.fromstring(convert_track(_ct_song([beat]), track_index=0))  # noqa: S314
+    root = safe_xml.safe_fromstring(convert_track(_ct_song([beat]), track_index=0))
     xn = root.findall(".//notes/note")[0]
     assert xn.get("bend") == "2.0"
     assert xn.get("bendIntent") == "4"        # round-trip
@@ -937,7 +937,7 @@ def test_bent_note_imports_with_curve_through_wire():
 def test_non_bent_note_has_no_curve():
     note = _ct_note(guitarpro.NoteType.normal, gp_string=1, fret=5)  # bend=None
     beat = _ct_beat(tick=0, dur_value=4, notes=[note])
-    root = ET.fromstring(convert_track(_ct_song([beat]), track_index=0))  # noqa: S314
+    root = safe_xml.safe_fromstring(convert_track(_ct_song([beat]), track_index=0))
     xn = root.findall(".//notes/note")[0]
     assert xn.get("bend") == "0"
     assert xn.get("bendIntent") is None
@@ -997,7 +997,7 @@ def test_tie_does_not_attach_to_overwritten_earlier_voice_note():
 
     xml_str = convert_track(_ct_multivoice_song([[v0_beat2], [v1_beat0, v1_tie]]),
                             track_index=0)
-    root = ET.fromstring(xml_str)  # noqa: S314
+    root = safe_xml.safe_fromstring(xml_str)
     notes = root.findall(".//notes/note")
 
     sustains = {n.get("fret"): float(n.get("sustain")) for n in notes}
@@ -1016,7 +1016,7 @@ def test_two_normal_notes_on_same_string_are_both_emitted():
     beat2 = _ct_beat(tick=GP_TICKS_PER_QUARTER, dur_value=4, notes=[note2])
 
     xml_str = convert_track(_ct_song([beat1, beat2]), track_index=0)
-    root = ET.fromstring(xml_str)  # noqa: S314
+    root = safe_xml.safe_fromstring(xml_str)
     notes = root.findall(".//notes/note")
 
     assert len(notes) == 2
@@ -1071,7 +1071,7 @@ def test_piano_tied_chord_both_notes_extended():
     beat2 = _ct_beat(tick=GP_TICKS_PER_QUARTER, dur_value=4, notes=[t_c3, t_d3])
 
     xml_str = convert_piano_track(_piano_song([beat1, beat2]), track_index=0)
-    root = ET.fromstring(xml_str)  # noqa: S314
+    root = safe_xml.safe_fromstring(xml_str)
     chords = root.findall(".//chords/chord")
 
     assert len(chords) == 1, "tie beat must not emit a second chord"
@@ -1173,7 +1173,7 @@ def test_tie_not_extended_across_repeat_boundary():
                            notes=[_ct_note(guitarpro.NoteType.normal, gp_string=1, fret=5)])
 
     xml_str = convert_track(_ct_song_repeat([tie_beat], [normal_beat]), track_index=0)
-    root = ET.fromstring(xml_str)  # noqa: S314
+    root = safe_xml.safe_fromstring(xml_str)
     notes = root.findall(".//notes/note")
 
     # Two passes through measure 1 → two normal notes; the ties are both dropped.
@@ -1220,7 +1220,7 @@ def test_chord_diagram_fingers_extracted():
     )
 
     xml_str = convert_track(_ct_song([beat]), track_index=0)
-    root = ET.fromstring(xml_str)  # noqa: S314
+    root = safe_xml.safe_fromstring(xml_str)
     ct = root.find(".//chordTemplates/chordTemplate")
     assert ct is not None
     assert ct.get("chordName") == "Gtest"
@@ -1238,7 +1238,7 @@ def test_single_note_left_hand_finger_imports_as_fg():
     note.effect.leftHandFinger = guitarpro.Fingering.middle  # -> 2
     beat = _ct_beat(tick=0, dur_value=4, notes=[note])
 
-    root = ET.fromstring(convert_track(_ct_song([beat]), track_index=0))  # noqa: S314
+    root = safe_xml.safe_fromstring(convert_track(_ct_song([beat]), track_index=0))
     xn = root.findall(".//notes/note")[0]
     assert xn.get("fretFinger") == "2"
     assert note_to_wire(_parse_note(xn))["fg"] == 2
@@ -1251,7 +1251,7 @@ def test_single_note_open_finger_omits_fg():
     note.effect.leftHandFinger = guitarpro.Fingering.open  # -1 -> unset
     beat = _ct_beat(tick=0, dur_value=4, notes=[note])
 
-    root = ET.fromstring(convert_track(_ct_song([beat]), track_index=0))  # noqa: S314
+    root = safe_xml.safe_fromstring(convert_track(_ct_song([beat]), track_index=0))
     xn = root.findall(".//notes/note")[0]
     assert xn.get("fretFinger") is None
     assert "fg" not in note_to_wire(_parse_note(xn))
@@ -1276,7 +1276,7 @@ def test_chord_beat_stroke_field_imports_as_pkd():
     # real GP5 chord-strum beat, where only .stroke is populated.
 
     xml_str = convert_track(_ct_song([beat]), track_index=0)
-    root = ET.fromstring(xml_str)  # noqa: S314
+    root = safe_xml.safe_fromstring(xml_str)
     chord_notes = root.findall(".//chords/chord/chordNote")
     assert len(chord_notes) == 2
     for cn in chord_notes:
@@ -1295,7 +1295,7 @@ def test_stroke_field_preferred_over_pick_stroke_when_both_set():
         direction=guitarpro.BeatStrokeDirection.down, value=64)
     beat.effect.pickStroke = guitarpro.BeatStrokeDirection.up
 
-    root = ET.fromstring(convert_track(_ct_song([beat]), track_index=0))  # noqa: S314
+    root = safe_xml.safe_fromstring(convert_track(_ct_song([beat]), track_index=0))
     xn = root.findall(".//notes/note")[0]
     assert xn.get("pickDirection") == "0"  # stroke (down), not pickStroke (up)
 
@@ -1311,7 +1311,7 @@ def test_stroke_field_none_direction_falls_back_to_pick_stroke():
         direction=guitarpro.BeatStrokeDirection.none, value=0)
     beat.effect.pickStroke = guitarpro.BeatStrokeDirection.up
 
-    root = ET.fromstring(convert_track(_ct_song([beat]), track_index=0))  # noqa: S314
+    root = safe_xml.safe_fromstring(convert_track(_ct_song([beat]), track_index=0))
     xn = root.findall(".//notes/note")[0]
     assert xn.get("pickDirection") == "1"
 
@@ -1325,7 +1325,7 @@ def test_single_note_down_stroke_imports_as_pkd_0():
     beat = _ct_beat(tick=0, dur_value=4, notes=[note])
     beat.effect.pickStroke = guitarpro.BeatStrokeDirection.down
 
-    root = ET.fromstring(convert_track(_ct_song([beat]), track_index=0))  # noqa: S314
+    root = safe_xml.safe_fromstring(convert_track(_ct_song([beat]), track_index=0))
     xn = root.findall(".//notes/note")[0]
     assert xn.get("pickDirection") == "0"
     assert note_to_wire(_parse_note(xn))["pkd"] == 0
@@ -1337,7 +1337,7 @@ def test_single_note_up_stroke_imports_as_pkd_1():
     beat = _ct_beat(tick=0, dur_value=4, notes=[note])
     beat.effect.pickStroke = guitarpro.BeatStrokeDirection.up
 
-    root = ET.fromstring(convert_track(_ct_song([beat]), track_index=0))  # noqa: S314
+    root = safe_xml.safe_fromstring(convert_track(_ct_song([beat]), track_index=0))
     xn = root.findall(".//notes/note")[0]
     assert xn.get("pickDirection") == "1"
     assert note_to_wire(_parse_note(xn))["pkd"] == 1
@@ -1351,7 +1351,7 @@ def test_note_no_stroke_omits_pick_direction():
     beat = _ct_beat(tick=0, dur_value=4, notes=[note])
     beat.effect.pickStroke = guitarpro.BeatStrokeDirection.none
 
-    root = ET.fromstring(convert_track(_ct_song([beat]), track_index=0))  # noqa: S314
+    root = safe_xml.safe_fromstring(convert_track(_ct_song([beat]), track_index=0))
     xn = root.findall(".//notes/note")[0]
     assert xn.get("pickDirection") is None
     assert "pkd" not in note_to_wire(_parse_note(xn))
@@ -1400,7 +1400,7 @@ def test_chord_beat_with_stroke_marks_template_arpeggio():
         direction=guitarpro.BeatStrokeDirection.down, value=64)
 
     xml_str = convert_track(_ct_song([beat]), track_index=0)
-    root = ET.fromstring(xml_str)  # noqa: S314
+    root = safe_xml.safe_fromstring(xml_str)
     ct = root.find(".//chordTemplates/chordTemplate")
     assert ct.get("arp") == "1"
     for cn in root.findall(".//chords/chord/chordNote"):
@@ -1412,7 +1412,7 @@ def test_chord_beat_without_stroke_omits_arpeggio():
     beat = _arp_chord_beat()
 
     xml_str = convert_track(_ct_song([beat]), track_index=0)
-    root = ET.fromstring(xml_str)  # noqa: S314
+    root = safe_xml.safe_fromstring(xml_str)
     ct = root.find(".//chordTemplates/chordTemplate")
     assert ct.get("arp") is None
 
@@ -1424,7 +1424,7 @@ def test_chord_beat_with_only_pick_stroke_omits_arpeggio():
     beat.effect.pickStroke = guitarpro.BeatStrokeDirection.up
 
     xml_str = convert_track(_ct_song([beat]), track_index=0)
-    root = ET.fromstring(xml_str)  # noqa: S314
+    root = safe_xml.safe_fromstring(xml_str)
     ct = root.find(".//chordTemplates/chordTemplate")
     assert ct.get("arp") is None
     cn = root.findall(".//chords/chord/chordNote")[0]
@@ -1440,7 +1440,7 @@ def test_chord_beat_with_none_direction_stroke_omits_arpeggio():
         direction=guitarpro.BeatStrokeDirection.none, value=0)
 
     xml_str = convert_track(_ct_song([beat]), track_index=0)
-    root = ET.fromstring(xml_str)  # noqa: S314
+    root = safe_xml.safe_fromstring(xml_str)
     ct = root.find(".//chordTemplates/chordTemplate")
     assert ct.get("arp") is None
 
@@ -1468,7 +1468,7 @@ def test_note_missing_pick_stroke_attr_omits_pick_direction():
     note = _ct_note(guitarpro.NoteType.normal, gp_string=2, fret=5)
     beat = _ct_beat(tick=0, dur_value=4, notes=[note])  # no .effect.pickStroke
 
-    root = ET.fromstring(convert_track(_ct_song([beat]), track_index=0))  # noqa: S314
+    root = safe_xml.safe_fromstring(convert_track(_ct_song([beat]), track_index=0))
     xn = root.findall(".//notes/note")[0]
     assert xn.get("pickDirection") is None
 
@@ -1482,7 +1482,7 @@ def test_chord_notes_all_share_the_beats_single_stroke_direction():
     beat.effect.pickStroke = guitarpro.BeatStrokeDirection.up
 
     xml_str = convert_track(_ct_song([beat]), track_index=0)
-    root = ET.fromstring(xml_str)  # noqa: S314
+    root = safe_xml.safe_fromstring(xml_str)
     chord_notes = root.findall(".//chords/chord/chordNote")
     assert len(chord_notes) == 2
     assert all(cn.get("pickDirection") == "1" for cn in chord_notes)
@@ -1497,7 +1497,7 @@ def test_track_capo_imports_into_xml_and_arrangement(tmp_path):
     beat = _ct_beat(tick=0, dur_value=4, notes=[note])
 
     xml_str = convert_track(_ct_song([beat], offset=2), track_index=0)
-    root = ET.fromstring(xml_str)  # noqa: S314
+    root = safe_xml.safe_fromstring(xml_str)
     assert root.find("capo").text == "2"
 
     xml_path = tmp_path / "arr.xml"
@@ -1513,7 +1513,7 @@ def test_track_no_offset_attr_imports_capo_zero():
     beat = _ct_beat(tick=0, dur_value=4, notes=[note])
 
     xml_str = convert_track(_ct_song([beat]), track_index=0)  # no offset=
-    root = ET.fromstring(xml_str)  # noqa: S314
+    root = safe_xml.safe_fromstring(xml_str)
     assert root.find("capo").text == "0"
 
 
@@ -1526,7 +1526,7 @@ def test_chord_element_has_no_dead_strum_attribute():
     beat = _ct_beat(tick=0, dur_value=4, notes=[note_e, note_b])
 
     xml_str = convert_track(_ct_song([beat]), track_index=0)
-    root = ET.fromstring(xml_str)  # noqa: S314
+    root = safe_xml.safe_fromstring(xml_str)
     chord_el = root.find(".//chords/chord")
     assert chord_el is not None
     assert chord_el.get("strum") is None
@@ -1540,7 +1540,7 @@ def test_chord_without_diagram_has_blank_fingers():
     beat = _ct_beat(tick=0, dur_value=4, notes=[note_e, note_b])  # chord=None
 
     xml_str = convert_track(_ct_song([beat]), track_index=0)
-    root = ET.fromstring(xml_str)  # noqa: S314
+    root = safe_xml.safe_fromstring(xml_str)
     ct = root.find(".//chordTemplates/chordTemplate")
     assert ct is not None
     assert ct.get("chordName") == ""
@@ -1566,7 +1566,7 @@ def test_chord_diagram_backfills_template_first_strummed_unannotated():
     )
 
     xml_str = convert_track(_ct_song([plain, annotated]), track_index=0)
-    root = ET.fromstring(xml_str)  # noqa: S314
+    root = safe_xml.safe_fromstring(xml_str)
     cts = root.findall(".//chordTemplates/chordTemplate")
     assert len(cts) == 1, "same voicing must dedup to one template"
     assert cts[0].get("chordName") == "Gtest"
@@ -1587,7 +1587,7 @@ def test_chord_diagram_mismatch_not_applied():
     )
 
     xml_str = convert_track(_ct_song([beat]), track_index=0)
-    root = ET.fromstring(xml_str)  # noqa: S314
+    root = safe_xml.safe_fromstring(xml_str)
     ct = root.find(".//chordTemplates/chordTemplate")
     assert ct is not None
     assert ct.get("chordName") == ""
@@ -1615,7 +1615,7 @@ def test_chord_diagram_name_then_fingers_decoupled():
                    [guitarpro.Fingering.middle, guitarpro.Fingering.index])
 
     xml_str = convert_track(_ct_song([first, second]), track_index=0)
-    root = ET.fromstring(xml_str)  # noqa: S314
+    root = safe_xml.safe_fromstring(xml_str)
     cts = root.findall(".//chordTemplates/chordTemplate")
     assert len(cts) == 1
     assert cts[0].get("chordName") == "Gtest"  # from the first (name-only) beat
@@ -1638,7 +1638,7 @@ def test_chord_diagram_barre_higher_position_matches():
     beat.effect.chord = ch
 
     xml_str = convert_track(_ct_song([beat]), track_index=0)
-    root = ET.fromstring(xml_str)  # noqa: S314
+    root = safe_xml.safe_fromstring(xml_str)
     ct = root.find(".//chordTemplates/chordTemplate")
     assert ct is not None
     assert ct.get("chordName") == "A"
@@ -1664,7 +1664,7 @@ def test_chord_diagram_extended_string_outside_played_width_not_applied():
     )
 
     xml_str = convert_track(_ct_song([beat], string_values=seven), track_index=0)
-    root = ET.fromstring(xml_str)  # noqa: S314
+    root = safe_xml.safe_fromstring(xml_str)
     ct = root.find(".//chordTemplates/chordTemplate")
     assert ct is not None
     assert ct.get("chordName") == ""
