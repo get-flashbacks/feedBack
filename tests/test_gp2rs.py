@@ -24,6 +24,7 @@ from gp2rs import (
     _build_playback_schedule,
     _compute_tuning,
     _extract_year,
+    _gp_beat_arpeggio,
     _gp_bend_shape,
     _gp_string_to_rs,
     _is_bass_track,
@@ -1354,6 +1355,111 @@ def test_note_no_stroke_omits_pick_direction():
     xn = root.findall(".//notes/note")[0]
     assert xn.get("pickDirection") is None
     assert "pkd" not in note_to_wire(_parse_note(xn))
+
+
+# ── convert_track: arpeggio flag on chord templates (issue #57) ─────────────
+# GP-authored chord arpeggios are marked via `beat.effect.stroke` — the same
+# "brush" field _gp_pick_direction reads for strum direction — but as a
+# *presence* signal (any real direction), not translated into up/down. This
+# must attach to the ChordTemplate as `arp`, distinct from the per-note
+# pickDirection derived from the same field.
+
+def test_gp_beat_arpeggio_detector():
+    assert _gp_beat_arpeggio(None) is False
+    assert _gp_beat_arpeggio(SimpleNamespace(stroke=None, pickStroke=None)) is False
+    assert _gp_beat_arpeggio(SimpleNamespace(
+        stroke=SimpleNamespace(direction=guitarpro.BeatStrokeDirection.none, value=0),
+    )) is False
+    assert _gp_beat_arpeggio(SimpleNamespace(
+        stroke=SimpleNamespace(direction=guitarpro.BeatStrokeDirection.down, value=64),
+    )) is True
+    assert _gp_beat_arpeggio(SimpleNamespace(
+        stroke=SimpleNamespace(direction=guitarpro.BeatStrokeDirection.up, value=64),
+    )) is True
+    # A bare pickStroke (no .stroke) is a plain strum, not an arpeggio.
+    assert _gp_beat_arpeggio(SimpleNamespace(
+        stroke=None, pickStroke=guitarpro.BeatStrokeDirection.up,
+    )) is False
+
+
+def test_chord_beat_with_stroke_marks_template_arpeggio():
+    """A chord beat carrying `.stroke` emits `arp="1"` on its <chordTemplate>,
+    and the chord notes still carry their own pickDirection — both signals
+    coexist independently."""
+    note_e = _ct_note(guitarpro.NoteType.normal, gp_string=1, fret=3)
+    note_b = _ct_note(guitarpro.NoteType.normal, gp_string=2, fret=2)
+    beat = _ct_beat(tick=0, dur_value=4, notes=[note_e, note_b])
+    beat.effect.stroke = SimpleNamespace(
+        direction=guitarpro.BeatStrokeDirection.down, value=64)
+
+    xml_str = convert_track(_ct_song([beat]), track_index=0)
+    root = ET.fromstring(xml_str)  # noqa: S314
+    ct = root.find(".//chordTemplates/chordTemplate")
+    assert ct.get("arp") == "1"
+    for cn in root.findall(".//chords/chord/chordNote"):
+        assert cn.get("pickDirection") == "0"
+
+
+def test_chord_beat_without_stroke_omits_arpeggio():
+    """A plain chord strum (no .stroke) leaves `arp` unset — no fabricated flag."""
+    note_e = _ct_note(guitarpro.NoteType.normal, gp_string=1, fret=3)
+    note_b = _ct_note(guitarpro.NoteType.normal, gp_string=2, fret=2)
+    beat = _ct_beat(tick=0, dur_value=4, notes=[note_e, note_b])
+
+    xml_str = convert_track(_ct_song([beat]), track_index=0)
+    root = ET.fromstring(xml_str)  # noqa: S314
+    ct = root.find(".//chordTemplates/chordTemplate")
+    assert ct.get("arp") is None
+
+
+def test_chord_beat_with_only_pick_stroke_omits_arpeggio():
+    """A bare `.pickStroke` (no `.stroke`) is a plain up/down strum, not an
+    arpeggio — `arp` stays unset even though pickDirection is still derived."""
+    note_e = _ct_note(guitarpro.NoteType.normal, gp_string=1, fret=3)
+    note_b = _ct_note(guitarpro.NoteType.normal, gp_string=2, fret=2)
+    beat = _ct_beat(tick=0, dur_value=4, notes=[note_e, note_b])
+    beat.effect.pickStroke = guitarpro.BeatStrokeDirection.up
+
+    xml_str = convert_track(_ct_song([beat]), track_index=0)
+    root = ET.fromstring(xml_str)  # noqa: S314
+    ct = root.find(".//chordTemplates/chordTemplate")
+    assert ct.get("arp") is None
+    cn = root.findall(".//chords/chord/chordNote")[0]
+    assert cn.get("pickDirection") == "1"
+
+
+def test_chord_beat_with_none_direction_stroke_omits_arpeggio():
+    """A `.stroke` object present but carrying `BeatStrokeDirection.none`
+    (attrs' default_factory always creates one) must not be mistaken for an
+    authored arpeggio marker."""
+    note_e = _ct_note(guitarpro.NoteType.normal, gp_string=1, fret=3)
+    note_b = _ct_note(guitarpro.NoteType.normal, gp_string=2, fret=2)
+    beat = _ct_beat(tick=0, dur_value=4, notes=[note_e, note_b])
+    beat.effect.stroke = SimpleNamespace(
+        direction=guitarpro.BeatStrokeDirection.none, value=0)
+
+    xml_str = convert_track(_ct_song([beat]), track_index=0)
+    root = ET.fromstring(xml_str)  # noqa: S314
+    ct = root.find(".//chordTemplates/chordTemplate")
+    assert ct.get("arp") is None
+
+
+def test_arpeggio_flag_survives_xml_to_wire_round_trip(tmp_path):
+    """The `arp` attribute survives XML -> Arrangement -> wire, matching the
+    already-implemented downstream consumer (feedpakr's derive_handshapes)."""
+    from song import chord_template_to_wire, parse_arrangement
+    note_e = _ct_note(guitarpro.NoteType.normal, gp_string=1, fret=3)
+    note_b = _ct_note(guitarpro.NoteType.normal, gp_string=2, fret=2)
+    beat = _ct_beat(tick=0, dur_value=4, notes=[note_e, note_b])
+    beat.effect.stroke = SimpleNamespace(
+        direction=guitarpro.BeatStrokeDirection.down, value=64)
+
+    xml_str = convert_track(_ct_song([beat]), track_index=0)
+    xml_path = tmp_path / "arr.xml"
+    xml_path.write_text(xml_str, encoding="utf-8")
+    arr = parse_arrangement(str(xml_path))
+    assert len(arr.chord_templates) == 1
+    assert chord_template_to_wire(arr.chord_templates[0])["arp"] is True
 
 
 def test_note_missing_pick_stroke_attr_omits_pick_direction():

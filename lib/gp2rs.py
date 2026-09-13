@@ -112,6 +112,7 @@ class ChordTemplate:
     name: str
     frets: list[int]  # per string, -1 = unused
     fingers: list[int]  # per string, -1 = unused
+    arp: bool = False  # arpeggio/handshape marker — see _gp_beat_arpeggio
 
 
 @dataclass
@@ -300,6 +301,22 @@ def _gp_pick_direction(effect) -> int:
     if direction == guitarpro.BeatStrokeDirection.up:
         return 1
     return -1
+
+
+def _gp_beat_arpeggio(effect) -> bool:
+    """Read a chord beat's arpeggio marker off a pyguitarpro BeatEffect.
+
+    `effect.stroke` (BeatStroke(direction, value)) is the "brush" GP's own UI
+    writes when you drag across a chord to arpeggiate it — see
+    `_gp_pick_direction` above for the same field used for strum direction.
+    Unlike pick direction, arpeggio does NOT fall back to `.pickStroke`: a
+    bare pick-stroke mark is a plain up/down strum, not an arpeggio brush.
+    """
+    if effect is None:
+        return False
+    stroke = getattr(effect, "stroke", None)
+    direction = getattr(stroke, "direction", None) if stroke is not None else None
+    return direction is not None and direction != guitarpro.BeatStrokeDirection.none
 
 
 def _pick_direction_xml_attrs(n: "RsNote") -> dict:
@@ -1033,6 +1050,14 @@ def convert_track(
                     else:
                         idx = chord_template_map[fret_key]
 
+                    # Arpeggio is a per-beat articulation, not diagram data, so
+                    # it attaches regardless of whether this beat also carries
+                    # a chord diagram. Templates dedupe by fret_key, so one
+                    # arpeggiated beat marks every strum sharing that voicing
+                    # — same template-level model as the name/fingers back-fill.
+                    if _gp_beat_arpeggio(beat.effect):
+                        chord_templates[idx].arp = True
+
                     # Enrich the template from the GP chord diagram attached to
                     # this beat — but ONLY when the diagram describes the voicing
                     # actually played (same width-normalized fret pattern). A
@@ -1248,6 +1273,8 @@ def _build_xml(
         for i in range(width):
             attrs[f"fret{i}"] = str(ct.frets[i] if i < len(ct.frets) else -1)
             attrs[f"finger{i}"] = str(ct.fingers[i] if i < len(ct.fingers) else -1)
+        if ct.arp:
+            attrs["arp"] = "1"
         ET.SubElement(ct_el, "chordTemplate", **attrs)
 
     # Single difficulty level with all notes
