@@ -1461,6 +1461,33 @@ def test_arpeggio_flag_survives_xml_to_wire_round_trip(tmp_path):
     assert chord_template_to_wire(arr.chord_templates[0])["arp"] is True
 
 
+def test_arpeggio_does_not_leak_to_other_strums_of_same_voicing():
+    """A voicing played BOTH arpeggiated (beat 1) and plainly strummed (beat 2)
+    elsewhere in the song must not share one ChordTemplate — otherwise marking
+    the first beat's template `arp=True` would incorrectly mark the second,
+    unrelated strum as an arpeggio too (Codacy review on PR #78)."""
+    arp_beat = _arp_chord_beat()
+    arp_beat.effect.stroke = SimpleNamespace(
+        direction=guitarpro.BeatStrokeDirection.down, value=64)
+    strum_beat = _arp_chord_beat()  # identical voicing, no stroke
+    strum_beat.start = GP_TICKS_PER_QUARTER
+
+    xml_str = convert_track(
+        _ct_song([arp_beat, strum_beat]), track_index=0)
+    root = safe_xml.safe_fromstring(xml_str)
+    templates = root.findall(".//chordTemplates/chordTemplate")
+    assert len(templates) == 2, \
+        "same voicing with different arp status must get separate templates"
+
+    chords = root.findall(".//chords/chord")
+    assert len(chords) == 2
+    arp_ct_id = int(chords[0].get("chordId"))
+    strum_ct_id = int(chords[1].get("chordId"))
+    assert arp_ct_id != strum_ct_id
+    assert templates[arp_ct_id].get("arp") == "1"
+    assert templates[strum_ct_id].get("arp") is None
+
+
 def test_note_missing_pick_stroke_attr_omits_pick_direction():
     """Beats built without a pickStroke attribute at all (the pre-fix mock
     shape, and older pyguitarpro effect objects) must not raise — getattr

@@ -1037,7 +1037,15 @@ def convert_track(
                     for n in beat_notes:
                         if 0 <= n.string < width:
                             frets[n.string] = n.fret
-                    fret_key = tuple(frets)
+                    # Arpeggio is part of the template's identity, not a
+                    # backfilled attribute: the same voicing can be strummed
+                    # in one passage and arpeggiated in another, and each
+                    # must render correctly on its own. Folding is_arp into
+                    # the dedup key (rather than mutating a shared template's
+                    # `arp` after the fact) keeps those two uses from
+                    # "leaking" into each other via one shared ChordTemplate.
+                    is_arp = _gp_beat_arpeggio(beat.effect)
+                    fret_key = (tuple(frets), is_arp)
 
                     if fret_key not in chord_template_map:
                         idx = len(chord_templates)
@@ -1045,18 +1053,11 @@ def convert_track(
                             name="",
                             frets=list(frets),
                             fingers=[-1] * width,
+                            arp=is_arp,
                         ))
                         chord_template_map[fret_key] = idx
                     else:
                         idx = chord_template_map[fret_key]
-
-                    # Arpeggio is a per-beat articulation, not diagram data, so
-                    # it attaches regardless of whether this beat also carries
-                    # a chord diagram. Templates dedupe by fret_key, so one
-                    # arpeggiated beat marks every strum sharing that voicing
-                    # — same template-level model as the name/fingers back-fill.
-                    if _gp_beat_arpeggio(beat.effect):
-                        chord_templates[idx].arp = True
 
                     # Enrich the template from the GP chord diagram attached to
                     # this beat — but ONLY when the diagram describes the voicing
