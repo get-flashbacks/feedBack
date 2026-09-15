@@ -165,8 +165,9 @@
             '<span class="text-fb-accent">🔥 ' + (p.current_streak || 0) + '-day streak</span>' +
             '<span>Best: ' + (p.best_streak || 0) + '</span></div>' +
             (pathChips ? '<div class="mt-3 flex items-center justify-center sm:justify-start gap-2 flex-wrap">' + pathChips + '</div>' : '') +
-            '<div class="mt-4 flex items-center justify-center sm:justify-start gap-4">' +
+            '<div class="mt-4 flex items-center justify-center sm:justify-start gap-4 flex-wrap">' +
             '<button type="button" data-v3-edit-profile class="text-sm text-fb-primary hover:text-fb-primaryHi">Edit name &amp; avatar</button>' +
+            '<button type="button" data-v3-switch-profile class="text-sm text-fb-primary hover:text-fb-primaryHi">Switch profile</button>' +
             '<button type="button" data-v3-open-progress class="text-sm text-fb-primary hover:text-fb-primaryHi">View challenges &amp; quests →</button>' +
             '</div></div></div>';
         // Per-song bests — top scored songs from /api/stats/top, filled by
@@ -208,6 +209,8 @@
             '</div>';
         const edit = root.querySelector('[data-v3-edit-profile]');
         if (edit) edit.addEventListener('click', () => show(_profile, { editing: true }));
+        const switchProfileBtn = root.querySelector('[data-v3-switch-profile]');
+        if (switchProfileBtn) switchProfileBtn.addEventListener('click', () => showProfileSwitcher());
         const openProgress = root.querySelector('[data-v3-open-progress]');
         if (openProgress) openProgress.addEventListener('click', () => window.showScreen && window.showScreen('v3-progress'));
         if (window.v3Theme && typeof window.v3Theme.applyFrame === 'function') {
@@ -256,6 +259,129 @@
                 if (fn && typeof window.playSong === 'function') window.playSong(encodeURIComponent(fn));
             });
         });
+    }
+
+    // ── Profile switcher (feedBack#swap-profiles) ─────────────────────────────
+    // A "who's playing" picker — password-less, device-local switching (no
+    // auth system exists to hang a session off). Switching reloads the whole
+    // page: the active profile is a server-side/device-global pointer, not a
+    // per-request session, so a full reload is the simplest way to guarantee
+    // every already-open piece of UI (player, highway WS, plugin state) picks
+    // up the new profile rather than showing a stale mix of old/new data.
+    async function fetchProfiles() {
+        try {
+            const r = await fetch('/api/profiles');
+            if (r.ok) return (await r.json()).profiles || [];
+        } catch (e) { /* P15 */ }
+        return [];
+    }
+
+    function showProfileSwitcher() {
+        document.getElementById('v3-profile-switcher')?.remove();
+        const overlay = document.createElement('div');
+        overlay.id = 'v3-profile-switcher';
+        overlay.className = 'fixed inset-0 z-[200] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4';
+        overlay.innerHTML =
+            '<div class="bg-fb-card rounded-xl border border-fb-border/50 w-full max-w-md p-6 space-y-4">' +
+            '<h3 class="text-lg font-bold text-fb-text">Switch profile</h3>' +
+            '<div id="v3-ps-list" class="space-y-2 max-h-80 overflow-y-auto">Loading…</div>' +
+            '<div class="flex items-center gap-2 pt-2 border-t border-fb-border/50">' +
+            '<input id="v3-ps-new-name" type="text" maxlength="32" placeholder="New profile name" ' +
+            'class="flex-1 bg-gray-800/50 border border-gray-700 rounded-md px-3 py-2 text-sm text-fb-text outline-none ' +
+            'focus:border-fb-primary focus:ring-1 focus:ring-fb-primary">' +
+            '<button type="button" id="v3-ps-create" class="px-3 py-2 rounded-md text-sm bg-fb-primary hover:bg-fb-primaryHi ' +
+            'text-white font-medium whitespace-nowrap">Add profile</button>' +
+            '</div>' +
+            '<p id="v3-ps-error" class="text-sm text-fb-accent hidden"></p>' +
+            '<div class="flex justify-end"><button type="button" id="v3-ps-close" class="px-4 py-2 rounded-md text-sm ' +
+            'text-fb-textDim hover:text-fb-text">Close</button></div>' +
+            '</div>';
+        document.body.appendChild(overlay);
+
+        const listEl = overlay.querySelector('#v3-ps-list');
+        const errEl = overlay.querySelector('#v3-ps-error');
+        function showErr(msg) { errEl.textContent = msg; errEl.classList.remove('hidden'); }
+
+        async function renderList() {
+            const profiles = await fetchProfiles();
+            if (!profiles.length) {
+                listEl.innerHTML = '<p class="text-sm text-fb-textDim">Couldn’t load profiles.</p>';
+                return;
+            }
+            listEl.innerHTML = profiles.map((p) =>
+                '<div class="flex items-center gap-3 rounded-lg border border-fb-border/50 p-2 ' +
+                (p.active ? 'bg-fb-primary/10 ring-1 ring-fb-primary/40' : 'bg-fb-bg/30') + '">' +
+                avatarImg(p.avatar_url, 'w-9 h-9') +
+                '<div class="flex-1 min-w-0"><div class="text-sm text-fb-text truncate">' + esc(p.display_name || 'Player') +
+                (p.active ? ' <span class="text-xs text-fb-primary">(current)</span>' : '') + '</div></div>' +
+                (p.active ? '' :
+                    '<button type="button" data-ps-switch="' + p.id + '" class="px-3 py-1.5 rounded-md text-xs ' +
+                    'bg-fb-primary hover:bg-fb-primaryHi text-white font-medium whitespace-nowrap">Switch</button>') +
+                (!p.active && profiles.length > 1 ?
+                    '<button type="button" data-ps-delete="' + p.id + '" title="Delete profile" ' +
+                    'class="px-2 py-1.5 rounded-md text-xs text-fb-textDim hover:text-fb-accent">✕</button>' : '') +
+                '</div>').join('');
+            listEl.querySelectorAll('[data-ps-switch]').forEach((btn) => {
+                btn.addEventListener('click', async () => {
+                    errEl.classList.add('hidden');
+                    btn.disabled = true;
+                    try {
+                        const id = btn.getAttribute('data-ps-switch');
+                        const res = await fetch('/api/profiles/' + id + '/activate', { method: 'POST' });
+                        if (!res.ok) {
+                            const body = await res.json().catch(() => ({}));
+                            showErr(body.error || 'Could not switch profile.');
+                            btn.disabled = false;
+                            return;
+                        }
+                        // Full-page reload: the active profile is server-side/
+                        // device-global, so every screen needs a fresh boot.
+                        window.location.reload();
+                    } catch (e) { showErr('Could not switch profile.'); btn.disabled = false; }
+                });
+            });
+            listEl.querySelectorAll('[data-ps-delete]').forEach((btn) => {
+                btn.addEventListener('click', async () => {
+                    errEl.classList.add('hidden');
+                    const id = btn.getAttribute('data-ps-delete');
+                    if (!window.confirm('Delete this profile and all its stats, achievements, and progress? This can’t be undone.')) return;
+                    btn.disabled = true;
+                    try {
+                        const res = await fetch('/api/profiles/' + id, { method: 'DELETE' });
+                        if (!res.ok) {
+                            const body = await res.json().catch(() => ({}));
+                            showErr(body.error || 'Could not delete profile.');
+                            btn.disabled = false;
+                            return;
+                        }
+                        await renderList();
+                    } catch (e) { showErr('Could not delete profile.'); btn.disabled = false; }
+                });
+            });
+        }
+        renderList();
+
+        overlay.querySelector('#v3-ps-create').addEventListener('click', async () => {
+            errEl.classList.add('hidden');
+            const nameEl = overlay.querySelector('#v3-ps-new-name');
+            const name = nameEl.value.trim();
+            if (!name) { showErr('Enter a name for the new profile.'); return; }
+            const createBtn = overlay.querySelector('#v3-ps-create');
+            createBtn.disabled = true;
+            try {
+                const res = await fetch('/api/profiles', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ display_name: name }),
+                });
+                const body = await res.json();
+                if (!res.ok) { showErr(body.error || 'Could not create profile.'); return; }
+                nameEl.value = '';
+                await renderList();
+            } catch (e) { showErr('Could not create profile.'); } finally { createBtn.disabled = false; }
+        });
+
+        overlay.querySelector('#v3-ps-close').addEventListener('click', () => overlay.remove());
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
     }
 
     // ── First-run onboarding (and edit) overlay ───────────────────────────────
