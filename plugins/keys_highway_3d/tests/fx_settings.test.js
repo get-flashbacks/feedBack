@@ -28,6 +28,32 @@ test('readFxSettings: defaults survive a localStorage-less environment', () => {
     assert.equal(FX_DEFAULTS.bloom, true); // effects on by default
 });
 
+test('hand filter defaults to both and persists validated choices', () => {
+    const bare = load();
+    assert.equal(bare.slopsmithViz_keys_highway_3d.__test.readHandFilterSetting(), 'both');
+
+    const store = {};
+    const events = [];
+    const win = load({
+        localStorage: {
+            getItem: (k) => (k in store ? store[k] : null),
+            setItem: (k, v) => { store[k] = v; },
+        },
+        dispatchEvent: (ev) => { events.push(ev); return true; },
+        CustomEvent: class { constructor(type, opts) { this.type = type; this.detail = opts.detail; } },
+    });
+    win.keys3dSetHandFilter('left');
+    assert.equal(store.keys3d_hand_filter, 'left');
+    assert.equal(win.slopsmithViz_keys_highway_3d.__test.readHandFilterSetting(), 'left');
+    assert.equal(events[0].detail.handFilter, 'left');
+
+    win.keys3dSetHandFilter('invalid');
+    assert.equal(store.keys3d_hand_filter, 'left');
+    assert.equal(events.length, 1);
+    store.keys3d_hand_filter = 'corrupt';
+    assert.equal(win.slopsmithViz_keys_highway_3d.__test.readHandFilterSetting(), 'both');
+});
+
 test('readFxSettings: reads keys3d_bg_* overrides and coerces types', () => {
     const store = { keys3d_bg_bloom: '0' };
     const win = load({

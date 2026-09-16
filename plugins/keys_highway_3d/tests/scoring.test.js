@@ -78,6 +78,49 @@ test('judgeHit: empty/absent chart never judges', () => {
     assert.equal(judgeHit(null, 60, 1.0, new Set(), TOL), null);
 });
 
+test('hand filter keeps only the selected labelled hand and preserves unlabelled notes', () => {
+    const { filterNotationByHand } = load();
+    const notes = [
+        { midi: 48, t: 1, hand: 'lh' },
+        { midi: 72, t: 1, hand: 'rh' },
+        { midi: 60, t: 1 },
+        { midi: 64, t: 1, hand: 'solo' },
+    ];
+    assert.equal(filterNotationByHand(notes, 'both'), notes);
+    assert.deepEqual(filterNotationByHand(notes, 'left').map(n => n.midi), [48, 60, 64]);
+    assert.deepEqual(filterNotationByHand(notes, 'right').map(n => n.midi), [72, 60, 64]);
+});
+
+test('hidden-hand chart notes are neutral while unrelated notes remain wrong', () => {
+    const { matchesHiddenHandNote } = load();
+    const notes = [
+        { midi: 48, t: 1, hand: 'lh' },
+        { midi: 72, t: 1, hand: 'rh' },
+        { midi: 60, t: 1 },
+    ];
+    assert.equal(matchesHiddenHandNote(notes, 72, 1.05, TOL, 'left'), true);
+    assert.equal(matchesHiddenHandNote(notes, 48, 1.05, TOL, 'left'), false);
+    assert.equal(matchesHiddenHandNote(notes, 60, 1.05, TOL, 'left'), false);
+    assert.equal(matchesHiddenHandNote(notes, 75, 1.05, TOL, 'left'), false);
+    assert.equal(matchesHiddenHandNote(notes, 72, 1.05, TOL, 'both'), false);
+});
+
+test('miss sweep counts visible and unlabelled notes but not the hidden hand', () => {
+    const { filterNotationByHand, sweepMissed } = load();
+    const all = [
+        { midi: 48, t: 1, hand: 'lh' },
+        { midi: 72, t: 1, hand: 'rh' },
+        { midi: 60, t: 1 },
+    ];
+    const missed = [];
+    const visible = filterNotationByHand(all, 'left');
+    assert.equal(sweepMissed(
+        visible, 2, new Set(), new Set(), TOL, null,
+        note => missed.push(note.midi),
+    ), 2);
+    assert.deepEqual(missed, [48, 60]);
+});
+
 test('sweepMissed: marks elapsed unhit notes once, respects hit + floor', () => {
     const { sweepMissed, noteKey } = load();
     const notes = [

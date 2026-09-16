@@ -4,9 +4,24 @@
         Pick a song with keys notation (sloppak-spec §5.3) and choose
         <em>Keys Highway 3D</em> from the viz picker (Auto selects it for
         notation charts). The plugin auto-attaches to your MIDI keyboard;
-        device, channel and transpose are configured from the player for
-        now — this panel holds the graphics controls.
+        device, channel and transpose are configured from the player.
     </p>
+
+    <div class="mt-3">
+        <h4 class="text-xs font-medium text-gray-300 mb-2">Practice</h4>
+        <label for="keysh3d-hand-filter" class="text-xs font-medium text-gray-400 mb-1 block">Hands</label>
+        <select id="keysh3d-hand-filter"
+            onchange="window.keys3dSetHandFilter && window.keys3dSetHandFilter(this.value)"
+            class="w-full bg-dark-700 border border-gray-800 rounded-lg px-3 py-2 text-xs text-gray-300 outline-none">
+            <option value="both" selected>Both</option>
+            <option value="left">Left</option>
+            <option value="right">Right</option>
+        </select>
+        <p class="text-xs text-gray-500 mt-1 mb-3">
+            Show and score both hands, left hand only, or right hand only.
+            Notes without a hand label remain included.
+        </p>
+    </div>
 
     <!-- Graphics -->
     <div class="mt-3">
@@ -334,6 +349,11 @@
             hydrateFxRangeIn('camHeight', 'keysh3d-fx-camheight', 'keysh3d-fx-camheight-val');
             hydrateFxRangeIn('camDist', 'keysh3d-fx-camdist', 'keysh3d-fx-camdist-val');
             hydrateFxRangeIn('camTilt', 'keysh3d-fx-camtilt', 'keysh3d-fx-camtilt-val');
+            const storedHandFilter = localStorage.getItem('keys3d_hand_filter');
+            const handFilterSel = document.getElementById('keysh3d-hand-filter');
+            if (storedHandFilter && Array.from(handFilterSel.options).some(o => o.value === storedHandFilter)) {
+                handFilterSel.value = storedHandFilter;
+            }
             const storedCamera = localStorage.getItem('keys3d_bg_camera');
             const cameraSel = document.getElementById('keysh3d-fx-camera');
             if (storedCamera && Array.from(cameraSel.options).some(o => o.value === storedCamera)) {
