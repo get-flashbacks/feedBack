@@ -307,6 +307,25 @@
         midiPick: 'keys3d_midi_pick',       // {id, name} JSON (drum-h3d v2 pattern)
         midiChannel: 'keys3d_midi_ch',      // -1 = all channels
         transpose: 'keys3d_transpose',      // semitones added to incoming notes
+        handFilter: 'keys3d_hand_filter',   // both | left | right
+    };
+
+    const HAND_FILTERS = ['both', 'left', 'right'];
+
+    function readHandFilterSetting() {
+        try {
+            const id = localStorage.getItem(STORE_KEYS.handFilter);
+            if (HAND_FILTERS.indexOf(id) !== -1) return id;
+        } catch (_) {}
+        return 'both';
+    }
+
+    window.keys3dSetHandFilter = function (id) {
+        if (HAND_FILTERS.indexOf(id) === -1) return;
+        try { localStorage.setItem(STORE_KEYS.handFilter, id); } catch (_) {}
+        try {
+            window.dispatchEvent(new CustomEvent('keys3d:settings', { detail: { handFilter: id } }));
+        } catch (_) { /* dispatch unavailable — persisted value applies next init */ }
     };
 
     // Inputs whose name matches this are skipped by auto-connect (loopbacks
@@ -581,6 +600,24 @@
         });
     }
 
+    // Hand labels in the notation format are `lh` and `rh`. Notes without a
+    // recognised label cannot be assigned safely, so they remain visible and
+    // scoreable in every mode rather than disappearing from practice.
+    function noteMatchesHandFilter(note, handFilter) {
+        if (handFilter === 'both') return true;
+        const hand = note && typeof note.hand === 'string'
+            ? note.hand.trim().toLowerCase() : '';
+        if (hand === 'lh') return handFilter === 'left';
+        if (hand === 'rh') return handFilter === 'right';
+        return true;
+    }
+
+    function filterNotationByHand(notes, handFilter) {
+        if (!Array.isArray(notes)) return [];
+        if (HAND_FILTERS.indexOf(handFilter) === -1 || handFilter === 'both') return notes;
+        return notes.filter(note => noteMatchesHandFilter(note, handFilter));
+    }
+
     // Letter printed on a key top (C, C#, D, …) — pure.
     function noteLetter(midi) {
         return NOTE_NAMES[((midi % 12) + 12) % 12];
@@ -635,6 +672,21 @@
         return null;
     }
 
+    // A played note that lines up with an explicitly hidden-hand target is
+    // neutral: it is neither a hit nor a wrong-note miss. Call this only after
+    // judgeHit() has failed against the visible target list so a simultaneous
+    // visible note always wins.
+    function matchesHiddenHandNote(notes, playedMidi, t, tol, handFilter) {
+        if (!Array.isArray(notes) || handFilter === 'both') return false;
+        for (const n of notes) {
+            if (n.t > t + tol + 0.5) break;
+            if (n.t < t - tol - 0.5) continue;
+            if (noteMatchesHandFilter(n, handFilter)) continue;
+            if (n.midi === playedMidi && Math.abs(n.t - t) <= tol) return true;
+        }
+        return false;
+    }
+
     // Missed-note sweep (piano _updateMissedNotes, rebuilt on a monotonic
     // cursor): walk notes whose window has fully elapsed and mark unhit
     // ones as missed. `cursor` ({idx}) makes the sweep O(elapsed) and
@@ -665,6 +717,24 @@
         }
         if (cursor) cursor.idx = i;
         return count;
+    }
+
+    // First index in `notes` (ascending by `.t`) at or past the miss-sweep
+    // window for time `t` — exactly where sweepMissed(notes, t, …) would
+    // stop (`cutoff = t - tol - 0.05`). Used to resume the sweep at the
+    // current position after a mid-run chart rebuild instead of re-walking
+    // the elapsed tail.
+    function sweepStartIndex(notes, t, tol) {
+        if (!Array.isArray(notes) || !notes.length) return 0;
+        const cutoff = Number(t) - tol - 0.05;
+        if (!Number.isFinite(cutoff)) return 0;
+        let lo = 0, hi = notes.length;
+        while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (notes[mid].t <= cutoff) lo = mid + 1;
+            else hi = mid;
+        }
+        return lo;
     }
 
     /* ======================================================================
@@ -1795,10 +1865,13 @@
         let markerSprites = []; // [{sprite, t}]
         let keyMeshes = new Map(); // midi → mesh
         let _isReady = false;
-        let _notation = null;  // {notes, range, markers, phrases, playable}
-        // Mastery fraction (0..1) `_notation.playable` was last computed
-        // against — `null` forces a recompute on the first draw() after a
-        // chart loads. feedBack#67.
+        // `masteryPlayable` excludes notes hidden by difficulty; `playable`
+        // additionally applies the selected hand and is the sole render/score list.
+        let _notation = null;  // {notes, range, markers, phrases, masteryPlayable, playable}
+        let _handFilter = readHandFilterSetting();
+        // Mastery fraction (0..1) `_notation.masteryPlayable` was last
+        // computed against — `null` forces a recompute on the first draw()
+        // after a chart loads. feedBack#67.
         let _lastMasteryApplied = null;
         let _loadSeq = 0;
         let _songHandler = null;
@@ -3292,8 +3365,8 @@
         /* ── Hit detection / scoring (piano _checkHit port) ───────────── */
 
         function _checkHit(playedMidi, t) {
-            // Score against the mastery-filtered subset (feedBack#67) — a
-            // note hidden by the current mastery level isn't expected play.
+            // Score against the mastery + hand-filtered subset. A note hidden
+            // by either setting isn't expected play.
             if (!_notation || !_notation.playable.length) return;
             const key = judgeHit(_notation.playable, playedMidi, t, _hitNoteKeys, HIT_TOLERANCE_S);
             const wall = performance.now();
@@ -3314,6 +3387,12 @@
                 _scoreOnHit(playedMidi);
                 _ndReport(true, playedMidi, _ndBindingId);
             } else {
+                // Practising one hand must not punish the player for also
+                // touching a charted note that belongs only to the hidden hand.
+                if (matchesHiddenHandNote(
+                    _notation.masteryPlayable, playedMidi, t,
+                    HIT_TOLERANCE_S, _handFilter,
+                )) return;
                 const prevStreak = _streak;
                 _misses++;
                 _streak = 0;
@@ -3334,6 +3413,28 @@
             // the new chart build and its first draw() must be judged at
             // the new run's start, not against the previous song's time.
             _latestTime = 0;
+        }
+
+        // Mid-run chart rebuild (hand/mastery filter change): re-anchor the
+        // miss sweep at the current playback position instead of the list
+        // head. _resetScoring() rewinds _sweepCursor to 0 — right for a fresh
+        // chart, wrong here, where playback keeps advancing: a sweep from 0
+        // against a just-emptied _hitNoteKeys/_missedNoteKeys would re-mark
+        // every already-elapsed visible note (including ones already hit) as
+        // a miss and tank the run's accuracy. The floor keeps the tolerance
+        // band around the change retro-free (a "run restart", matching what
+        // the reset already does to hits/streak), and _latestTime is restored
+        // so a note-on landing before the next draw still judges against real
+        // song time, not the reset's 0.
+        function _anchorMissSweep(now) {
+            _sweepCursor.idx = sweepStartIndex(_notation && _notation.playable, now, HIT_TOLERANCE_S);
+            if (Number.isFinite(Number(now))) {
+                const curTime = Number(now);
+                _missFloor = curTime;
+                _latestTime = curTime;
+            } else {
+                _missFloor = null;
+            }
         }
 
         // Swept-miss callback — kept as a named function so the per-frame
@@ -3621,6 +3722,7 @@
                 const { measures, phrases } = await fetchNotation(song.filename, song.arrangementIndex != null ? song.arrangementIndex : -1);
                 if (seq !== _loadSeq || !_isReady) return; // superseded / torn down
                 const notes = flattenNotation(measures);
+                const playable = filterNotationByHand(notes, _handFilter);
                 _notation = {
                     notes,
                     range: keyRange(notes),
@@ -3635,11 +3737,11 @@
                     // data to).
                     phrases: Array.isArray(phrases)
                         ? phrases.slice().sort((a, b) => a.start_time - b.start_time) : [],
-                    // Mastery-filtered subset actually rendered/scored.
-                    // Starts as the full list; _maybeApplyMasteryFilter()
-                    // (called every draw()) narrows it once bundle.notes/
-                    // bundle.chords are available and mastery is known.
-                    playable: notes,
+                    // Mastery-filtered base plus the hand-filtered subset that
+                    // is actually rendered/scored. _maybeApplyMasteryFilter()
+                    // narrows the base once bundle notes/chords are available.
+                    masteryPlayable: notes,
+                    playable,
                 };
                 _lastMasteryApplied = null; // force a recompute on next draw()
                 buildKeyboardAndHighway();
@@ -3688,7 +3790,7 @@
         // user-driven event, not a per-frame one). Rebuilding note meshes
         // and resetting scoring on every call would be wasteful and is
         // exactly what the equality check above avoids.
-        function _maybeApplyMasteryFilter(bundle) {
+        function _maybeApplyMasteryFilter(bundle, now) {
             if (!_notation || !bundle) return;
             if (!_notation.phrases.length) return; // fixed-difficulty chart — nothing to do
             const mastery = Number(bundle.mastery);
@@ -3703,8 +3805,9 @@
             // untouched so this cheap check retries on the next draw().
             if (!Array.isArray(tabNotes) && !Array.isArray(tabChords)) return;
             _lastMasteryApplied = mastery;
-            _notation.playable = filterNotationByMastery(
+            _notation.masteryPlayable = filterNotationByMastery(
                 _notation.notes, _notation.phrases, tabNotes, tabChords);
+            _notation.playable = filterNotationByHand(_notation.masteryPlayable, _handFilter);
             buildNoteMeshes();
             // The old playable set's indices/entries no longer line up with
             // the new one — a stale _sweepCursor position or a "hit" keyed
@@ -3712,6 +3815,10 @@
             // mirrors the same reset loadNotationForCurrentSong already
             // does for a fresh chart load.
             _resetScoring();
+            // …but unlike a fresh chart, playback kept advancing — resume
+            // the miss sweep from the current position so notes the player
+            // already passed aren't retroactively counted as misses.
+            _anchorMissSweep(now);
         }
 
         // Per-song note-detection binding: close the previous one, register
@@ -3992,6 +4099,7 @@
                 // viz is torn down) must not come up stale on a later init().
                 _palette = readPaletteSetting();
                 _sharpMode = readSharpModeSetting();
+                _handFilter = readHandFilterSetting();
                 _camPreset = CAM_PRESETS[readCameraSetting()] || CAM_PRESETS.classic;
                 _theme = readThemeSetting();
                 _bgStyle = readBgStyleSetting();
@@ -4045,6 +4153,20 @@
                         if (d && d.sharpMode && SHARP_MODES.indexOf(d.sharpMode) !== -1) {
                             // Geometry-time — takes effect on the next chart build.
                             _sharpMode = d.sharpMode;
+                        }
+                        if (d && HAND_FILTERS.indexOf(d.handFilter) !== -1) {
+                            _handFilter = d.handFilter;
+                            if (_notation) {
+                                const curTime = _latestTime;
+                                _notation.playable = filterNotationByHand(
+                                    _notation.masteryPlayable, _handFilter);
+                                buildNoteMeshes();
+                                _resetScoring();
+                                // same as the mastery path: resume the sweep
+                                // where playback is now — notes already
+                                // elapsed must not re-sweep as misses
+                                _anchorMissSweep(curTime);
+                            }
                         }
                         if (d && d.camera && CAM_PRESETS[d.camera]) {
                             _camPreset = CAM_PRESETS[d.camera];
@@ -4134,7 +4256,7 @@
                 }
                 const now = (bundle && typeof bundle.currentTime === 'number') ? bundle.currentTime : 0;
                 if (_notation) {
-                    _maybeApplyMasteryFilter(bundle);
+                    _maybeApplyMasteryFilter(bundle, now);
                     updateScene(now);
                 }
                 _animateFeedback(performance.now());
@@ -4258,13 +4380,19 @@
         _phraseContaining,
         _phraseHasFilteredContent,
         filterNotationByMastery,
+        noteMatchesHandFilter,
+        filterNotationByHand,
         noteLetter,
         scrollZ,
         noteKey,
         accuracyOf,
         scoreOf,
         judgeHit,
+        matchesHiddenHandNote,
         sweepMissed,
+        sweepStartIndex,
+        readHandFilterSetting,
+        HAND_FILTERS,
         readFxSettings,
         readThemeSetting,
         readBgStyleSetting,

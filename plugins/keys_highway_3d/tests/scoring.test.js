@@ -78,6 +78,49 @@ test('judgeHit: empty/absent chart never judges', () => {
     assert.equal(judgeHit(null, 60, 1.0, new Set(), TOL), null);
 });
 
+test('hand filter keeps only the selected labelled hand and preserves unlabelled notes', () => {
+    const { filterNotationByHand } = load();
+    const notes = [
+        { midi: 48, t: 1, hand: 'lh' },
+        { midi: 72, t: 1, hand: 'rh' },
+        { midi: 60, t: 1 },
+        { midi: 64, t: 1, hand: 'solo' },
+    ];
+    assert.equal(filterNotationByHand(notes, 'both'), notes);
+    assert.deepEqual(filterNotationByHand(notes, 'left').map(n => n.midi), [48, 60, 64]);
+    assert.deepEqual(filterNotationByHand(notes, 'right').map(n => n.midi), [72, 60, 64]);
+});
+
+test('hidden-hand chart notes are neutral while unrelated notes remain wrong', () => {
+    const { matchesHiddenHandNote } = load();
+    const notes = [
+        { midi: 48, t: 1, hand: 'lh' },
+        { midi: 72, t: 1, hand: 'rh' },
+        { midi: 60, t: 1 },
+    ];
+    assert.equal(matchesHiddenHandNote(notes, 72, 1.05, TOL, 'left'), true);
+    assert.equal(matchesHiddenHandNote(notes, 48, 1.05, TOL, 'left'), false);
+    assert.equal(matchesHiddenHandNote(notes, 60, 1.05, TOL, 'left'), false);
+    assert.equal(matchesHiddenHandNote(notes, 75, 1.05, TOL, 'left'), false);
+    assert.equal(matchesHiddenHandNote(notes, 72, 1.05, TOL, 'both'), false);
+});
+
+test('miss sweep counts visible and unlabelled notes but not the hidden hand', () => {
+    const { filterNotationByHand, sweepMissed } = load();
+    const all = [
+        { midi: 48, t: 1, hand: 'lh' },
+        { midi: 72, t: 1, hand: 'rh' },
+        { midi: 60, t: 1 },
+    ];
+    const missed = [];
+    const visible = filterNotationByHand(all, 'left');
+    assert.equal(sweepMissed(
+        visible, 2, new Set(), new Set(), TOL, null,
+        note => missed.push(note.midi),
+    ), 2);
+    assert.deepEqual(missed, [48, 60]);
+});
+
 test('sweepMissed: marks elapsed unhit notes once, respects hit + floor', () => {
     const { sweepMissed, noteKey } = load();
     const notes = [
@@ -144,6 +187,47 @@ test('sweepMissed: cursor advances monotonically and never recounts', () => {
     const mk2 = new Set();
     assert.equal(sweepMissed(notes, 8.0, new Set(), mk2, TOL, 5.0, null, c2), 0);
     assert.equal(c2.idx, 2);
+});
+
+test('sweepStartIndex returns exactly where sweepMissed would stop', () => {
+    const { sweepStartIndex, sweepMissed } = load();
+    const notes = [
+        { midi: 60, t: 1.0 },
+        { midi: 62, t: 2.0 },
+        { midi: 64, t: 5.0 },
+    ];
+    const cursor = { idx: 0 };
+    assert.equal(sweepMissed(notes, 2.4, new Set(), new Set(), TOL, null, null, cursor), 2);
+    assert.equal(cursor.idx, sweepStartIndex(notes, 2.4, TOL));
+    assert.equal(sweepStartIndex(notes, 0, TOL), 0);
+    assert.equal(sweepStartIndex(notes, 99, TOL), notes.length);
+    assert.equal(sweepStartIndex([], 5, TOL), 0);
+    assert.equal(sweepStartIndex(null, 5, TOL), 0);
+    assert.equal(sweepStartIndex(notes, Number.NaN, TOL), 0);
+});
+
+test('mid-run filter change: anchored sweep skips the elapsed tail, still sweeps after', () => {
+    // Mirrors _anchorMissSweep on the hand/mastery-filter change path: playable
+    // is rebuilt mid-run, the cursor is re-seeded at the current position and
+    // a floor set at the change instant. Already-elapsed notes — including
+    // ones hit before the change — must never become retroactive misses,
+    // while notes that elapse afterwards are swept normally.
+    const { sweepStartIndex, sweepMissed, noteKey } = load();
+    const notes = [
+        { midi: 48, t: 1.0, hand: 'lh' },
+        { midi: 60, t: 2.0 },
+        { midi: 72, t: 5.0, hand: 'rh' },
+    ];
+    const hitKeys = new Set([noteKey(1.0, 48)]); // hit before the change
+    const missedKeys = new Set();
+    const missed = [];
+    const cursor = { idx: sweepStartIndex(notes, 3.2, TOL) };
+    // t=5.4: the 5.0 note has elapsed; 1.0/2.0 are behind the anchor + floor.
+    const n = sweepMissed(notes, 5.4, hitKeys, missedKeys, TOL, 3.2,
+        note => missed.push(note.midi), cursor);
+    assert.equal(n, 1);
+    assert.deepEqual(missed, [72]);
+    assert.equal(cursor.idx, 3);
 });
 
 test('noteKey quantises time to ms so float drift cannot double-count', () => {
