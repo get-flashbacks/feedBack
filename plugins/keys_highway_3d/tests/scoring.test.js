@@ -189,6 +189,47 @@ test('sweepMissed: cursor advances monotonically and never recounts', () => {
     assert.equal(c2.idx, 2);
 });
 
+test('sweepStartIndex returns exactly where sweepMissed would stop', () => {
+    const { sweepStartIndex, sweepMissed } = load();
+    const notes = [
+        { midi: 60, t: 1.0 },
+        { midi: 62, t: 2.0 },
+        { midi: 64, t: 5.0 },
+    ];
+    const cursor = { idx: 0 };
+    assert.equal(sweepMissed(notes, 2.4, new Set(), new Set(), TOL, null, null, cursor), 2);
+    assert.equal(cursor.idx, sweepStartIndex(notes, 2.4, TOL));
+    assert.equal(sweepStartIndex(notes, 0, TOL), 0);
+    assert.equal(sweepStartIndex(notes, 99, TOL), notes.length);
+    assert.equal(sweepStartIndex([], 5, TOL), 0);
+    assert.equal(sweepStartIndex(null, 5, TOL), 0);
+    assert.equal(sweepStartIndex(notes, Number.NaN, TOL), 0);
+});
+
+test('mid-run filter change: anchored sweep skips the elapsed tail, still sweeps after', () => {
+    // Mirrors _anchorMissSweep on the hand/mastery-filter change path: playable
+    // is rebuilt mid-run, the cursor is re-seeded at the current position and
+    // a floor set at the change instant. Already-elapsed notes — including
+    // ones hit before the change — must never become retroactive misses,
+    // while notes that elapse afterwards are swept normally.
+    const { sweepStartIndex, sweepMissed, noteKey } = load();
+    const notes = [
+        { midi: 48, t: 1.0, hand: 'lh' },
+        { midi: 60, t: 2.0 },
+        { midi: 72, t: 5.0, hand: 'rh' },
+    ];
+    const hitKeys = new Set([noteKey(1.0, 48)]); // hit before the change
+    const missedKeys = new Set();
+    const missed = [];
+    const cursor = { idx: sweepStartIndex(notes, 3.2, TOL) };
+    // t=5.4: the 5.0 note has elapsed; 1.0/2.0 are behind the anchor + floor.
+    const n = sweepMissed(notes, 5.4, hitKeys, missedKeys, TOL, 3.2,
+        note => missed.push(note.midi), cursor);
+    assert.equal(n, 1);
+    assert.deepEqual(missed, [72]);
+    assert.equal(cursor.idx, 3);
+});
+
 test('noteKey quantises time to ms so float drift cannot double-count', () => {
     const { noteKey } = load();
     assert.equal(noteKey(1.0004, 60), noteKey(1.0001, 60));
