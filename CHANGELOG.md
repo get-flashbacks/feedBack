@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Coordinated deterministic frame rendering for Split Screen visualizations.** Highway instances can now opt into a host-owned frame driver, allowing every panel in a split layout to receive the same `requestAnimationFrame` timestamp and frame ID. Custom visualization renderers receive those values in their render bundle, so frame-dependent effects and pause/throttle decisions no longer vary with the browser's per-panel callback order. Existing single-player and plugin highways retain their self-scheduled rendering loop.
 - **keys_highway_3d now supports practicing a single hand** (Both / Left / Right). The 3D keys highway rendered and scored every labelled note in the chart regardless of which hand played it, so a focused left- or right-hand pass wasn't possible on two-handed notation. A new persisted `Hands` control (player settings, `keys3d_hand_filter`) splits rendering *and* scoring along the labels: notes marked `lh`/`rh` are kept or hidden per the selection, while unlabelled and nonstandard-staff (e.g. `solo`) notes stay visible and scoreable in every mode so a hand-agnostic part never silently disappears. Playing a charted note from the hidden hand is treated as neutral rather than a wrong-note miss, and switching the filter mid-run restarts scoring from the current playback position so notes the player already passed are never retroactively counted as missed.
 
 ### Fixed
