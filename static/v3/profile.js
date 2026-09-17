@@ -31,7 +31,15 @@
 
     // ── API ──────────────────────────────────────────────────────────────────
     async function fetchProfile() {
-        try { const r = await fetch('/api/profile'); if (r.ok) _profile = await r.json(); } catch (e) { /* P15 */ }
+        try {
+            const r = await fetch('/api/profile');
+            if (r.ok) {
+                _profile = await r.json();
+                if (window.feedBack && typeof window.feedBack.emit === 'function') {
+                    window.feedBack.emit('profile:changed', { ready: true });
+                }
+            }
+        } catch (e) { /* P15 */ }
         return _profile;
     }
     async function fetchProgress() {
