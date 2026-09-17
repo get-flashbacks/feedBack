@@ -92,7 +92,7 @@ test('_adaptRenderScale uses the draw budget + cooldown and re-applies via resiz
 
 test('draw() only adapts during active playback and feeds the HUD', () => {
     const src = highwaySources();
-    const fn = extractBlock(src, 'function draw()');
+    const fn = extractBlock(src, 'function draw(frameTime, frameId)');
     assert.match(fn, /if\s*\(\s*!_paused\s*\)\s*_adaptRenderScale/, 'must skip adaptation while paused');
     assert.match(fn, /_updatePerfHud\(\)/, 'must update the perf HUD each drawn frame');
 });
