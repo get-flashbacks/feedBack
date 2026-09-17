@@ -43,6 +43,15 @@ test('an external frame carries its timestamp and id through the render bundle',
     assert.match(bundle, /b\.frameId = frameId/);
 });
 
+test('offline export can paint an explicit chart time without taking over scheduling', () => {
+    const api = block('renderFrameAt(time)');
+    assert.match(api, /!hwState\.ready \|\| !Number\.isFinite\(time\)/);
+    assert.match(api, /api\.setTime\(time\)/);
+    assert.match(api, /draw\(\)/);
+    assert.match(api, /return true/);
+    assert.doesNotMatch(api, /setExternalFrameDriver/);
+});
+
 test('coordinated frames use their supplied timestamp for clock decisions', () => {
     const bundle = block('function _makeBundle(frameTime, frameId)');
     const draw = block('function draw()');

@@ -3001,6 +3001,24 @@ function createHighway() {
             draw();
         },
         /**
+         * Paint an explicit chart time for an offline exporter. Unlike the
+         * normal rAF path, this never reads the audio clock: each call draws
+         * precisely the requested song timestamp, which lets an encoder
+         * compose frames faster than real time without skipping visual state.
+         *
+         * This intentionally does not take ownership of scheduling. Offline
+         * callers may paint while playback is paused, and existing live
+         * renderers keep their private rAF loop unchanged.
+         */
+        renderFrameAt(time) {
+            if (!hwState.ready || !Number.isFinite(time)) return false;
+            api.setTime(time);
+            hwState._frameTime = undefined;
+            hwState._frameId = undefined;
+            draw();
+            return true;
+        },
+        /**
          * True when the built-in 2D canvas highway is the active renderer
          * (or none has been installed yet — that resolves to the default
          * on init). Overlay plugins that draw with the 2D-highway
