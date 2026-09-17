@@ -94,6 +94,12 @@ The UI contribution substrate should land first because every later UI/UX slice 
 
 UI/UX migration should preserve current plugin fields during the transition. Core can translate manifest `nav`, `screen`, and `settings` into contribution records before plugin scripts hydrate, then let runtime plugins re-register richer metadata when their scripts load. The removal gate for each legacy UI API is not just a new command name; it is proof that repeated script hydration, screen switching, player navigation, and plugin disable/enable cycles do not duplicate DOM nodes, wrappers, listeners, shortcuts, canvases, or tours.
 
+## Player Identity Slice
+
+The player-identity slice (#82) promotes `player-identity` as an active, core-owned exclusive domain. It supplies stable local `(session_id, player_id)` identity, profile readiness, context lifecycle events, private highway bindings, and count-only diagnostics without coupling identity to the deferred `ui.player-panels` layout domain. Split Screen owns its panel contexts, karaoke changes the main player's role/instrument/skill dimensions, Note Detection carries the matching context in finalized sessions, and Difficulty Ladder dispatches through `player-difficulty.v1`.
+
+`player-difficulty.v1` is the narrow command plane for applying one player's difficulty to one current highway. The Host validates the full context and target range; stale, incomplete, or vocal requests cannot fall through to a global setter. There is no compatibility shim because player-scoped identity did not previously exist. Older single-player Hosts continue through Difficulty Ladder's existing feature-detected compatibility adapter.
+
 ## Deferred Domains
 
 These domains are planned but should stay out of the runtime graph until a host workflow exists:
