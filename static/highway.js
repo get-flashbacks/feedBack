@@ -212,8 +212,6 @@ function createHighway() {
     // Normal highways schedule their own rAF. An embedding layout can opt in
     // to driving several instances from one callback through renderFrame().
     hwState._externalFrameDriver = false;
-    hwState._frameTime = undefined;
-    hwState._frameId = undefined;
     hwState._lastPausedDrawAt = 0;
     hwState._connectOpts = {};
     hwState._resizeContainer = null;
@@ -1228,10 +1226,8 @@ function createHighway() {
     // Render exactly one frame. `frameTime`/`frameId` are supplied by the
     // browser rAF loop in normal play, or by an embedding host that wants to
     // render a group of highways as one deterministic visual frame.
-    function draw() {
-        const frameTime = hwState._frameTime;
-        const frameId = hwState._frameId;
-        if (!hwState.canvas || !hwState._renderer) return;
+    function draw(frameTime, frameId) {
+        if (!hwState.canvas || !hwState._renderer) return false;
         hwState._frameIdx = Number.isFinite(frameId) ? (frameId | 0) : ((hwState._frameIdx + 1) | 0);
         // Visibility-aware skip (#246). Run BEFORE the !ready bail so
         // hide/show transitions during the loading / reconnect window
@@ -1270,7 +1266,7 @@ function createHighway() {
         // rendering (hidden, or WS not ready). It re-creates next frame once
         // rendering resumes and the flag is still on. (#654)
         if (hwState._perfHud && (!_rendering || !hwState.ready)) { hwState._perfHud.remove(); hwState._perfHud = null; }
-        if (!_rendering) return;
+        if (!_rendering) return false;
         // Match pre-refactor behaviour: skip draw until WS ready fires.
         // This gates out the brief "arrays cleared, WS reconnecting"
         // window during playSong / reconnect. Renderers that want to
@@ -1279,7 +1275,7 @@ function createHighway() {
         // we'd need to widen the contract to support that, out of
         // scope here. Default 2D renderer also checks `ready` in its
         // draw body (defence in depth).
-        if (!hwState.ready) return;
+        if (!hwState.ready) return false;
         // Playback-aware throttle (#654). Reuse getTime()'s pause
         // signal: once an anchor exists, chartTime not advancing for
         // > _CHART_MAX_INTERP_MS means audio is paused/stalled (the
@@ -1304,7 +1300,7 @@ function createHighway() {
                 // whole room to 10 fps whenever the song was paused. Optional
                 // method: renderers that don't implement it keep the throttle.
                 if (!_rendererNeedsContinuousFrames()
-                    && _nowP - hwState._lastPausedDrawAt < _PAUSED_FRAME_INTERVAL_MS) return;
+                    && _nowP - hwState._lastPausedDrawAt < _PAUSED_FRAME_INTERVAL_MS) return false;
                 hwState._lastPausedDrawAt = _nowP;
             }
         }
@@ -1322,6 +1318,7 @@ function createHighway() {
             // timing isn't representative of the playback workload.
             if (!_paused) _adaptRenderScale(performance.now() - _drawStart);
             _updatePerfHud();
+            return true;
         } catch (e) {
             hwState._rendererDrawFailures += 1;
             console.error('renderer draw:', e);
@@ -1339,6 +1336,7 @@ function createHighway() {
                 _setRenderer(_defaultRenderer);
                 _emitVizReverted('draw-failure');
             }
+            return false;
         }
     }
 
@@ -1351,9 +1349,7 @@ function createHighway() {
             return;
         }
         hwState.animFrame = requestAnimationFrame(_scheduleDraw);
-        hwState._frameTime = frameTime;
-        hwState._frameId = undefined;
-        draw();
+        draw(frameTime);
     }
 
     function drawHighway(W, H) {
@@ -2996,9 +2992,7 @@ function createHighway() {
          */
         renderFrame(frameTime, frameId) {
             if (!hwState._externalFrameDriver) return;
-            hwState._frameTime = frameTime;
-            hwState._frameId = frameId;
-            draw();
+            return draw(frameTime, frameId);
         },
         /**
          * Paint an explicit chart time for an offline exporter. Unlike the
@@ -3013,10 +3007,7 @@ function createHighway() {
         renderFrameAt(time) {
             if (!hwState.ready || !Number.isFinite(time)) return false;
             api.setTime(time);
-            hwState._frameTime = undefined;
-            hwState._frameId = undefined;
-            draw();
-            return true;
+            return draw();
         },
         /**
          * True when the built-in 2D canvas highway is the active renderer

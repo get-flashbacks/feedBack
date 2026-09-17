@@ -36,9 +36,10 @@ test('external driver cancels the private rAF and resumes it when released', () 
 
 test('an external frame carries its timestamp and id through the render bundle', () => {
     const api = block('renderFrame(frameTime, frameId)');
+    const draw = block('function draw(frameTime, frameId)');
     const bundle = block('function _makeBundle(frameTime, frameId)');
-    assert.match(api, /hwState\._frameTime = frameTime/);
-    assert.match(api, /hwState\._frameId = frameId/);
+    assert.match(api, /return draw\(frameTime, frameId\)/);
+    assert.match(draw, /_makeBundle\(frameTime, hwState\._frameIdx\)/);
     assert.match(bundle, /b\.frameTime = frameTime/);
     assert.match(bundle, /b\.frameId = frameId/);
 });
@@ -47,14 +48,13 @@ test('offline export can paint an explicit chart time without taking over schedu
     const api = block('renderFrameAt(time)');
     assert.match(api, /!hwState\.ready \|\| !Number\.isFinite\(time\)/);
     assert.match(api, /api\.setTime\(time\)/);
-    assert.match(api, /draw\(\)/);
-    assert.match(api, /return true/);
+    assert.match(api, /return draw\(\)/);
     assert.doesNotMatch(api, /setExternalFrameDriver/);
 });
 
 test('coordinated frames use their supplied timestamp for clock decisions', () => {
     const bundle = block('function _makeBundle(frameTime, frameId)');
-    const draw = block('function draw()');
+    const draw = block('function draw(frameTime, frameId)');
     assert.match(bundle, /const renderNow = Number\.isFinite\(frameTime\) \? frameTime : performance\.now\(\)/);
     assert.match(draw, /const _nowP = Number\.isFinite\(frameTime\) \? frameTime : performance\.now\(\)/);
 });

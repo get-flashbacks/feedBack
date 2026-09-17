@@ -54,7 +54,7 @@ test('highway declares the paused-render throttle state', () => {
 
 test('draw() throttles full renders while the audio clock is stalled', () => {
     const src = highwaySources();
-    const fn = extractBlock(src, 'function draw()');
+    const fn = extractBlock(src, 'function draw(frameTime, frameId)');
     // Reuse getTime()'s pause signal rather than inventing a parallel one.
     assert.match(fn, /_chartLastAdvanceAt/, 'throttle must key off _chartLastAdvanceAt (the advance timestamp)');
     assert.match(fn, /_CHART_MAX_INTERP_MS/, 'throttle must reuse the _CHART_MAX_INTERP_MS pause threshold');
@@ -64,11 +64,11 @@ test('draw() throttles full renders while the audio clock is stalled', () => {
 
 test('throttle runs after the ready gate, before bundle/draw', () => {
     const src = highwaySources();
-    const fn = extractBlock(src, 'function draw()');
+    const fn = extractBlock(src, 'function draw(frameTime, frameId)');
     // Regex landmarks (not exact-string indexOf) so harmless spacing /
     // semicolon changes don't break the ordering guard — matches the
     // search-based style of the other highway source-guard tests.
-    const readyIdx = fn.search(/if\s*\(\s*!hwState\.ready\s*\)\s*return;/);
+    const readyIdx = fn.search(/if\s*\(\s*!hwState\.ready\s*\)\s*return false;/);
     const throttleIdx = fn.search(/_PAUSED_FRAME_INTERVAL_MS/);
     const drawIdx = fn.search(/_renderer\.draw\s*\(/);
     assert.ok(readyIdx !== -1, 'ready gate not found');
@@ -91,14 +91,14 @@ test('throttle runs after the ready gate, before bundle/draw', () => {
 
 test('paused throttle defers to a renderer that needs continuous frames', () => {
     const src = highwaySources();
-    const fn = extractBlock(src, 'function draw()');
+    const fn = extractBlock(src, 'function draw(frameTime, frameId)');
     assert.match(fn, /_rendererNeedsContinuousFrames\s*\(\s*\)/,
         'the paused throttle must consult the renderer capability');
     // The capability must GATE the early-return, not merely be called near it:
     // the throttle only applies when the renderer does NOT need every frame.
     assert.match(
         fn,
-        /!\s*_rendererNeedsContinuousFrames\s*\(\s*\)[\s\S]{0,160}_PAUSED_FRAME_INTERVAL_MS[\s\S]{0,40}return;/,
+        /!\s*_rendererNeedsContinuousFrames\s*\(\s*\)[\s\S]{0,160}_PAUSED_FRAME_INTERVAL_MS[\s\S]{0,40}return false;/,
         'throttle must be skipped when the renderer needs continuous frames',
     );
 });
