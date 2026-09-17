@@ -94,3 +94,48 @@ test('karaoke normalization and diagnostics stay identity-free', () => {
     assert.equal(JSON.stringify(diagnostic).includes('secret-profile-hash'), false);
     assert.equal(JSON.stringify(diagnostic).includes('private-song.feedpak'), false);
 });
+
+test('song:loading invalidates the main context so a difficulty request against it returns no-target', async () => {
+    const window = load();
+    let mastery = null;
+    const highway = {
+        setMastery(value) { mastery = value; },
+        getSongInfo() { return { arrangement: 'Lead', arrangement_index: 0 }; },
+    };
+    window.highway = highway;
+    window.v3Profile = { get: () => ({ id: 'alex', ready: true }) };
+    window.feedBack.currentSong = { filename: 'song.feedpak', arrangement: 'Lead', arrangementIndex: 0 };
+    window.feedBack.emit('song:loaded');
+
+    const context = window.feedBack.playerContexts.getActive('main');
+    assert.equal(context.ready, true, 'main context must be published and ready after song:loaded');
+
+    // A same-screen song switch: song:loading fires well before the next
+    // song:loaded (the highway may already be stopped/reused in that gap).
+    window.feedBack.emit('song:loading');
+    assert.equal(window.feedBack.playerContexts.getActive('main'), null,
+        'the stale main context must be gone once song:loading fires');
+
+    mastery = null;
+    const stale = await window.feedBack.capabilities.dispatch({
+        capability: 'player-difficulty.v1', command: 'set', source: 'test',
+        args: { player_context: context, current_difficulty: 50 },
+    });
+    assert.equal(stale.outcome, 'no-target', 'a request against the invalidated context must not reach the highway');
+    assert.equal(mastery, null, 'the (possibly reused) highway must not be touched');
+});
+
+test('mainSong() prefers getSongInfo().arrangement_type over the display-name arrangement string', () => {
+    const window = load();
+    const highway = { setMastery() {} };
+    // 'arrangement' here is deliberately a generic display name that gives no
+    // instrument hint on its own — only arrangement_type identifies it as bass.
+    window.highway = highway;
+    window.feedBack.currentSong = { filename: 'song.feedpak', arrangement: 'Player 1' };
+    window.highway.getSongInfo = () => ({ arrangement: 'Player 1', arrangement_type: 'bass', arrangement_index: 2 });
+    window.feedBack.emit('song:loaded');
+
+    const context = window.feedBack.playerContexts.getActive('main');
+    assert.equal(context.instrument, 'bass',
+        'arrangement_type must be consulted, not just the display-name string');
+});

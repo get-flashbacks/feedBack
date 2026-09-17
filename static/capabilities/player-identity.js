@@ -4,7 +4,10 @@
     const fb = window.feedBack;
     const caps = fb && fb.capabilities;
     if (!caps || caps.version !== 1 || fb.playerContexts) return;
-    const session = window.crypto?.randomUUID?.() || `local-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const session = window.crypto?.randomUUID?.()
+        || (window.crypto?.getRandomValues
+            ? `local-${Date.now()}-${Array.from(window.crypto.getRandomValues(new Uint32Array(2)), b => b.toString(36)).join('')}`
+            : `local-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     const players = new Map();
     const fields = ['session_id', 'player_id', 'profile_id', 'profile_hash', 'song_id', 'arrangement_id', 'instrument', 'role', 'skill'];
     const text = value => value == null ? '' : String(value);
@@ -120,9 +123,9 @@
         if (!song?.filename) return;
         const info = window.highway?.getSongInfo?.() || {};
         const arrangement = info.arrangement || {};
-        const type = text(typeof arrangement === 'object'
-            ? (arrangement.type || arrangement.name || song.arrangement)
-            : arrangement).toLowerCase();
+        const type = text(info.arrangement_type
+            || (typeof arrangement === 'object' ? (arrangement.type || arrangement.name || song.arrangement) : arrangement)
+        ).toLowerCase();
         const instrument = /bass/.test(type) ? 'bass' : /piano|keys|keyboard/.test(type) ? 'keys'
             : /drum/.test(type) ? 'drums' : /vocal|voice|karaoke/.test(type) ? 'voice' : 'guitar';
         upsert({ player_id: 'main', song_id: song.filename,
@@ -130,6 +133,13 @@
             role: instrument === 'voice' ? 'karaoke' : /rhythm/.test(type) ? 'rhythm' : /lead/.test(type) ? 'lead' : 'instrumental',
         }, window.highway);
     }
+    // A same-screen song switch stops the highway and emits song:loading well
+    // before the next song:loaded; without this, a consumer holding the
+    // previous ready snapshot could still getHighway()/apply difficulty to
+    // the stopped-and-about-to-be-reused highway during that window (and
+    // indefinitely, if the load fails). Drop the context now; mainSong()
+    // republishes a fresh one on song:loaded.
+    fb.on?.('song:loading', () => leave('main'));
     fb.on?.('song:loaded', mainSong);
     fb.on?.('profile:changed', refreshProfiles);
     fb.on?.('v3:profile-updated', refreshProfiles);
