@@ -122,6 +122,19 @@
         const song = fb.currentSong;
         if (!song?.filename) return;
         const info = window.highway?.getSongInfo?.() || {};
+        // fb.currentSong / song:loaded are broadcast globals every highway
+        // instance overwrites+fires on its own song_info (highway.js) --
+        // including split-screen panels, which is exactly the concurrent-play
+        // case this capability exists to serve. window.highway itself always
+        // stays bound to the main player, so its OWN getSongInfo() is
+        // authoritative for arrangement/instrument (used below); but there is
+        // no per-instance filename exposed to cross-check song_id against, so
+        // reject a panel-fired event for a genuinely different song using the
+        // title/artist window.highway actually reports (present once its own
+        // song_info has arrived). A panel showing a different ARRANGEMENT of
+        // the SAME song -- the normal multi-panel case -- still passes.
+        if (info.title != null && text(info.title) !== text(song.title)) return;
+        if (info.artist != null && text(info.artist) !== text(song.artist)) return;
         const arrangement = info.arrangement || {};
         const type = text(info.arrangement_type
             || (typeof arrangement === 'object' ? (arrangement.type || arrangement.name || song.arrangement) : arrangement)

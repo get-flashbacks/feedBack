@@ -139,3 +139,51 @@ test('mainSong() prefers getSongInfo().arrangement_type over the display-name ar
     assert.equal(context.instrument, 'bass',
         'arrangement_type must be consulted, not just the display-name string');
 });
+
+test('a panel highway broadcasting song:loaded for a DIFFERENT song does not corrupt the main context', () => {
+    // fb.currentSong / song:loaded are shared globals every highway instance
+    // (main or a split-screen panel) overwrites and fires on its own
+    // song_info (see static/highway.js) -- panels are exactly the
+    // concurrent-play case this capability serves.
+    const window = load();
+    const highway = {
+        setMastery() {},
+        getSongInfo() { return { title: 'Main Song', artist: 'Main Artist', arrangement: 'Lead', arrangement_index: 0 }; },
+    };
+    window.highway = highway;
+    window.v3Profile = { get: () => ({ id: 'alex', ready: true }) };
+    window.feedBack.currentSong = { filename: 'main.feedpak', title: 'Main Song', artist: 'Main Artist', arrangement: 'Lead', arrangementIndex: 0 };
+    window.feedBack.emit('song:loaded');
+    const before = window.feedBack.playerContexts.getActive('main');
+    assert.equal(before.arrangement_id, '0');
+
+    // A split-screen panel loads an unrelated song and broadcasts on the
+    // SAME shared globals -- window.highway (main's own instance) is
+    // untouched, but fb.currentSong now reflects the panel.
+    window.feedBack.currentSong = { filename: 'other-song.feedpak', title: 'Other Song', artist: 'Other Artist', arrangement: 'Bass', arrangementIndex: 3 };
+    window.feedBack.emit('song:loaded');
+
+    assert.deepEqual(window.feedBack.playerContexts.getActive('main'), before,
+        'the main context must be untouched by a panel broadcasting a different song');
+});
+
+test('a panel highway broadcasting a DIFFERENT ARRANGEMENT of the SAME song still updates main (normal multi-panel case)', () => {
+    const window = load();
+    let arrangementIndex = 0;
+    const highway = {
+        setMastery() {},
+        getSongInfo() { return { title: 'Shared Song', artist: 'Shared Artist', arrangement: 'Lead', arrangement_index: arrangementIndex }; },
+    };
+    window.highway = highway;
+    window.v3Profile = { get: () => ({ id: 'alex', ready: true }) };
+    window.feedBack.currentSong = { filename: 'song.feedpak', title: 'Shared Song', artist: 'Shared Artist', arrangement: 'Lead', arrangementIndex: 0 };
+    window.feedBack.emit('song:loaded');
+    assert.equal(window.feedBack.playerContexts.getActive('main').arrangement_id, '0');
+
+    // Same song, main's own arrangement changed (simulating a legitimate
+    // main-player arrangement switch, reflected in window.highway itself).
+    arrangementIndex = 1;
+    window.feedBack.currentSong = { filename: 'song.feedpak', title: 'Shared Song', artist: 'Shared Artist', arrangement: 'Rhythm', arrangementIndex: 1 };
+    window.feedBack.emit('song:loaded');
+    assert.equal(window.feedBack.playerContexts.getActive('main').arrangement_id, '1');
+});
