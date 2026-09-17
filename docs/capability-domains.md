@@ -161,6 +161,14 @@ The synchronous `highway.setChartTransform` data-plane hook runs at chart ready,
 
 `getSongInfo()` retains original metadata; effective values are exposed by the renderer bundle and dedicated highway getters. Diagnostics under `feedBack.chart_transform.diagnostics.v1` contain provider selection/install state and a fixed public failure reason, never chart data, song identity, or raw exceptions. The domain has no compatibility shim because no earlier chart-substitution surface exists.
 
+## Player-Identity Domain
+
+The player-identity slice (#82) is a core-owned exclusive domain implemented by [static/capabilities/player-identity.js](../static/capabilities/player-identity.js). It gives every local player a stable `(session_id, player_id)` identity independently of the panel DOM. `window.feedBack.playerContexts` exposes synchronous snapshots and lifecycle mutation for first-party producers; public `player-context:ready`, `player-context:changed`, and `player-context:left` payloads never include the privately bound highway object.
+
+A context carries profile identity/readiness plus song, arrangement, instrument, role, and skill dimensions. The Host inherits the installed v3 profile when a producer does not supply one and keeps the context pending until that profile is ready. Vocal roles normalize to `role: "karaoke"` and `instrument: "voice"`; skill remains an independent dimension so vocal pitch cannot collide with instrumental overall progress.
+
+The companion `player-difficulty.v1` command accepts the complete context and a 0–100 target. Core resolves every current identity dimension before applying it to the privately bound highway, so stale arrangement/profile requests and vocal targets cannot change another panel. Diagnostics use `feedBack.player_identity.diagnostics.v1` and contain active/ready counts only—never session, player, profile, song, or arrangement identifiers, and never highway/DOM objects.
+
 ## MIDI-Input Domain
 
 The MIDI-input slice (spec 012, issues #873/#880) promotes `midi-input` as a **core-owned** provider-coordinator implemented by [static/capabilities/midi-input.js](../static/capabilities/midi-input.js) — the MIDI analog of `audio-input`. It is deliberately separate from `audio-input` (whose source/`open` contract is audio-frame-centric: channel shapes, sample buffers) because MIDI carries discrete messages, not audio; and it is **not** owned by any feature plugin, so the device-access boundary outlives the input-setup wizard (exactly as `audio-input` is `core.audio.session`-owned). Consumers — the `input_setup` onboarding wizard, the `piano`/keys and `drums` plugins, and (as a follow-up, #881) note-detection's Web-MIDI provider — converge here on ONE device-access boundary: one permission prompt, one source list, one redaction boundary, retiring private per-plugin `navigator.requestMIDIAccess()` calls.
