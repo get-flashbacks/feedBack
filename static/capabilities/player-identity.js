@@ -118,6 +118,25 @@
         getActive: (id = 'main') => snapshot(players.get(id)),
         list: () => [...players.values()].map(snapshot), getHighway, updateActive, refreshProfiles,
     });
+    function resolveType(info, song) {
+        const arrangement = info.arrangement || {};
+        return text(info.arrangement_type
+            || (typeof arrangement === 'object' ? (arrangement.type || arrangement.name || song.arrangement) : arrangement)
+        ).toLowerCase();
+    }
+    function classifyInstrument(type) {
+        if (/bass/.test(type)) return 'bass';
+        if (/piano|keys|keyboard/.test(type)) return 'keys';
+        if (/drum/.test(type)) return 'drums';
+        if (/vocal|voice|karaoke/.test(type)) return 'voice';
+        return 'guitar';
+    }
+    function classifyRole(instrument, type) {
+        if (instrument === 'voice') return 'karaoke';
+        if (/rhythm/.test(type)) return 'rhythm';
+        if (/lead/.test(type)) return 'lead';
+        return 'instrumental';
+    }
     function mainSong() {
         const song = fb.currentSong;
         if (!song?.filename) return;
@@ -135,15 +154,11 @@
         // the SAME song -- the normal multi-panel case -- still passes.
         if (info.title != null && text(info.title) !== text(song.title)) return;
         if (info.artist != null && text(info.artist) !== text(song.artist)) return;
-        const arrangement = info.arrangement || {};
-        const type = text(info.arrangement_type
-            || (typeof arrangement === 'object' ? (arrangement.type || arrangement.name || song.arrangement) : arrangement)
-        ).toLowerCase();
-        const instrument = /bass/.test(type) ? 'bass' : /piano|keys|keyboard/.test(type) ? 'keys'
-            : /drum/.test(type) ? 'drums' : /vocal|voice|karaoke/.test(type) ? 'voice' : 'guitar';
+        const type = resolveType(info, song);
+        const instrument = classifyInstrument(type);
         upsert({ player_id: 'main', song_id: song.filename,
             arrangement_id: text(info.arrangement_index ?? song.arrangementIndex ?? 0), instrument,
-            role: instrument === 'voice' ? 'karaoke' : /rhythm/.test(type) ? 'rhythm' : /lead/.test(type) ? 'lead' : 'instrumental',
+            role: classifyRole(instrument, type),
         }, window.highway);
     }
     // A same-screen song switch stops the highway and emits song:loading well
