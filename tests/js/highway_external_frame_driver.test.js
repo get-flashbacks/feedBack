@@ -6,9 +6,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const path = require('node:path');
 
-const highway = fs.readFileSync(path.join(__dirname, '..', '..', 'static', 'highway.js'), 'utf8');
+// The JS suite always runs from the repository root (package.json:test:js),
+// so keep this source fixture literal rather than constructing a path from
+// external input.
+const highway = fs.readFileSync('static/highway.js', 'utf8');
 
 function block(signature) {
     const start = highway.indexOf(signature);
