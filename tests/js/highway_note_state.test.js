@@ -67,7 +67,7 @@ test('public API exposes setNoteStateProvider / getNoteStateProvider / getNoteSt
 
 test('_makeBundle exposes getNoteState (stable reference, no per-frame alloc)', () => {
     const src = highwaySources();
-    const fn = extractBlock(src, 'function _makeBundle()');
+    const fn = extractBlock(src, 'function _makeBundle(frameTime, frameId)');
     // The bundle field must point straight at _noteState — not a fresh
     // arrow each frame (the per-frame allocation the review flagged).
     // R3c: _noteState now takes hwState first, so the bundle hands out a per-INSTANCE bound
@@ -83,7 +83,7 @@ test('_makeBundle exposes getNoteState (stable reference, no per-frame alloc)', 
 
 test('_makeBundle exposes getNoteStateProvider as a stable reference (feedBack#254)', () => {
     const src = highwaySources();
-    const fn = extractBlock(src, 'function _makeBundle()');
+    const fn = extractBlock(src, 'function _makeBundle(frameTime, frameId)');
     // Same allocation discipline as getNoteState: highway_3d uses this
     // bundle field to tell "provider attached" from "no provider but
     // getNoteState still exists and returns null", so a per-frame arrow

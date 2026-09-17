@@ -212,6 +212,8 @@ function createHighway() {
     // Normal highways schedule their own rAF. An embedding layout can opt in
     // to driving several instances from one callback through renderFrame().
     hwState._externalFrameDriver = false;
+    hwState._frameTime = undefined;
+    hwState._frameId = undefined;
     hwState._lastPausedDrawAt = 0;
     hwState._connectOpts = {};
     hwState._resizeContainer = null;
@@ -567,8 +569,8 @@ function createHighway() {
         // (Split Screen does this).  Keep that callback's timestamp and id in
         // the bundle so a renderer can make one deterministic decision for a
         // whole visual frame instead of sampling performance.now() separately
-        // in every panel.  They are undefined during lifecycle calls such as
-        // init(), where there is intentionally no render frame.
+        // in every panel. They are optional: lifecycle calls and the initial
+        // internal kick-start have no browser rAF timestamp or shared id.
         b.frameTime = frameTime;
         b.frameId = frameId;
 
@@ -1230,7 +1232,7 @@ function createHighway() {
         const frameTime = hwState._frameTime;
         const frameId = hwState._frameId;
         if (!hwState.canvas || !hwState._renderer) return;
-        hwState._frameIdx = Number.isFinite(frameId) ? frameId : ((hwState._frameIdx + 1) | 0);
+        hwState._frameIdx = Number.isFinite(frameId) ? (frameId | 0) : ((hwState._frameIdx + 1) | 0);
         // Visibility-aware skip (#246). Run BEFORE the !ready bail so
         // hide/show transitions during the loading / reconnect window
         // still propagate to listeners (a splitscreen-driven hide that
@@ -2968,7 +2970,9 @@ function createHighway() {
          * Switch between the private rAF loop and an external frame host.
          * External callers must invoke renderFrame(timestamp, frameId) once
          * per visual frame. This is deliberately opt-in so existing plugins
-         * retain their historical scheduling behaviour.
+         * retain their historical scheduling behaviour. The mode persists
+         * across stop()/init(); a host must call this with false during its
+         * own teardown to release the highway back to private scheduling.
          */
         setExternalFrameDriver(enabled) {
             const next = enabled === true;
@@ -2986,7 +2990,9 @@ function createHighway() {
         /**
          * Render one externally scheduled frame. `frameTime` should be the
          * timestamp received by requestAnimationFrame; `frameId` is optional
-         * but lets a coordinator give every panel the same frame identity.
+         * but should be an incrementing integer shared by all panels. It
+         * preserves the host's frame-count throttles (such as visibility
+         * sampling), rather than acting as a timestamp.
          */
         renderFrame(frameTime, frameId) {
             if (!hwState._externalFrameDriver) return;
