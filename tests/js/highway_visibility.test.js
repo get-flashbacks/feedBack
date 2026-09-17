@@ -59,7 +59,7 @@ test('_emitVisibilityIfChanged is transition-only (no per-frame spam)', () => {
 
 test('rAF draw() loop calls _emitVisibilityIfChanged and skips when hidden', () => {
     const src = fs.readFileSync(highwayJs, 'utf8');
-    const fn = extractBlock(src, 'function draw()');
+    const fn = extractBlock(src, 'function draw(frameTime, frameId)');
     assert.match(fn, /_emitVisibilityIfChanged\(\)/, 'rAF draw() must call _emitVisibilityIfChanged each tick');
     // Ordering: emit → skip-when-hidden → ready gate → renderer.draw.
     // The emit must run BEFORE the !ready bail so visibility
@@ -82,7 +82,7 @@ test('draw() keeps an active custom renderer painting through an override-hide (
     // renderer keeps getting draw() ONLY while still in layout; the default
     // 2D renderer and the genuine off-screen case still bail.
     const src = fs.readFileSync(highwayJs, 'utf8');
-    const fn = extractBlock(src, 'function draw()');
+    const fn = extractBlock(src, 'function draw(frameTime, frameId)');
     // Single render decision drives both the perf-HUD reset and the gate.
     assert.match(fn, /let\s+_rendering\s*=\s*hwState\._lastVisible/, 'must derive a single _rendering decision from _lastVisible');
     // Assert the exact boolean RELATIONSHIP, not just the tokens (CodeRabbit):

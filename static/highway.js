@@ -209,6 +209,9 @@ function createHighway() {
     hwState._domVisCached = false;
     hwState._domVisSampledFrame = NaN;
     hwState.animFrame = null;
+    // Normal highways schedule their own rAF. An embedding layout can opt in
+    // to driving several instances from one callback through renderFrame().
+    hwState._externalFrameDriver = false;
     hwState._lastPausedDrawAt = 0;
     hwState._connectOpts = {};
     hwState._resizeContainer = null;
@@ -535,7 +538,7 @@ function createHighway() {
     // (e.g. highway_3d's merge caches) rely on that invariant.
     const _bundleReused = {};
 
-    function _makeBundle() {
+    function _makeBundle(frameTime, frameId) {
         // Snapshot of current factory state passed to each renderer call.
         // Arrays and songInfo are LIVE references, not copies — the
         // bundle's `notes`, `chords`, `anchors`, `beats`, etc. point at
@@ -557,8 +560,17 @@ function createHighway() {
         // back to raw instead of extrapolating forward against a frozen
         // audio sample. Undefined on downlevel hosts → those renderers
         // keep their own staleness-based fallback.
+        const renderNow = Number.isFinite(frameTime) ? frameTime : performance.now();
         b.isPlaying = !Number.isNaN(hwState._chartAnchorPerfNow)
-            && (performance.now() - hwState._chartLastAdvanceAt) <= _CHART_MAX_INTERP_MS;
+            && (renderNow - hwState._chartLastAdvanceAt) <= _CHART_MAX_INTERP_MS;
+        // A render host may drive several highways from one rAF callback
+        // (Split Screen does this).  Keep that callback's timestamp and id in
+        // the bundle so a renderer can make one deterministic decision for a
+        // whole visual frame instead of sampling performance.now() separately
+        // in every panel. They are optional: lifecycle calls and the initial
+        // internal kick-start have no browser rAF timestamp or shared id.
+        b.frameTime = frameTime;
+        b.frameId = frameId;
 
         // Chart content (filter-aware — difficulty-filtered arrays
         // preferred; raw arrays are the fallback when no ladder data).
@@ -1211,10 +1223,12 @@ function createHighway() {
         try { return r.needsContinuousFrames() === true; } catch (_) { return false; }
     }
 
-    function draw() {
-        hwState.animFrame = requestAnimationFrame(draw);
-        if (!hwState.canvas || !hwState._renderer) return;
-        hwState._frameIdx = (hwState._frameIdx + 1) | 0;
+    // Render exactly one frame. `frameTime`/`frameId` are supplied by the
+    // browser rAF loop in normal play, or by an embedding host that wants to
+    // render a group of highways as one deterministic visual frame.
+    function draw(frameTime, frameId) {
+        if (!hwState.canvas || !hwState._renderer) return false;
+        hwState._frameIdx = Number.isFinite(frameId) ? (frameId | 0) : ((hwState._frameIdx + 1) | 0);
         // Visibility-aware skip (#246). Run BEFORE the !ready bail so
         // hide/show transitions during the loading / reconnect window
         // still propagate to listeners (a splitscreen-driven hide that
@@ -1252,7 +1266,7 @@ function createHighway() {
         // rendering (hidden, or WS not ready). It re-creates next frame once
         // rendering resumes and the flag is still on. (#654)
         if (hwState._perfHud && (!_rendering || !hwState.ready)) { hwState._perfHud.remove(); hwState._perfHud = null; }
-        if (!_rendering) return;
+        if (!_rendering) return false;
         // Match pre-refactor behaviour: skip draw until WS ready fires.
         // This gates out the brief "arrays cleared, WS reconnecting"
         // window during playSong / reconnect. Renderers that want to
@@ -1261,7 +1275,7 @@ function createHighway() {
         // we'd need to widen the contract to support that, out of
         // scope here. Default 2D renderer also checks `ready` in its
         // draw body (defence in depth).
-        if (!hwState.ready) return;
+        if (!hwState.ready) return false;
         // Playback-aware throttle (#654). Reuse getTime()'s pause
         // signal: once an anchor exists, chartTime not advancing for
         // > _CHART_MAX_INTERP_MS means audio is paused/stalled (the
@@ -1272,7 +1286,10 @@ function createHighway() {
         // (clock advancing) is never throttled.
         let _paused = false;
         if (!Number.isNaN(hwState._chartAnchorPerfNow)) {
-            const _nowP = performance.now();
+            // Use the coordinator's rAF timestamp when supplied. That makes
+            // pause/throttle decisions identical for every panel in a shared
+            // frame instead of depending on the order their draw calls ran.
+            const _nowP = Number.isFinite(frameTime) ? frameTime : performance.now();
             if (_nowP - hwState._chartLastAdvanceAt > _CHART_MAX_INTERP_MS) {
                 _paused = true;
                 // ...unless the renderer says its picture is NOT static while
@@ -1283,7 +1300,7 @@ function createHighway() {
                 // whole room to 10 fps whenever the song was paused. Optional
                 // method: renderers that don't implement it keep the throttle.
                 if (!_rendererNeedsContinuousFrames()
-                    && _nowP - hwState._lastPausedDrawAt < _PAUSED_FRAME_INTERVAL_MS) return;
+                    && _nowP - hwState._lastPausedDrawAt < _PAUSED_FRAME_INTERVAL_MS) return false;
                 hwState._lastPausedDrawAt = _nowP;
             }
         }
@@ -1291,7 +1308,7 @@ function createHighway() {
         // it reads closure state directly and ignores the bundle.
         // _makeBundle at 60fps was a steady GC churn for the common
         // case where no custom renderer is installed.
-        const bundle = hwState._renderer === _defaultRenderer ? undefined : _makeBundle();
+        const bundle = hwState._renderer === _defaultRenderer ? undefined : _makeBundle(frameTime, hwState._frameIdx);
         try {
             const _drawStart = performance.now();
             hwState._renderer.draw(bundle);
@@ -1301,6 +1318,7 @@ function createHighway() {
             // timing isn't representative of the playback workload.
             if (!_paused) _adaptRenderScale(performance.now() - _drawStart);
             _updatePerfHud();
+            return true;
         } catch (e) {
             hwState._rendererDrawFailures += 1;
             console.error('renderer draw:', e);
@@ -1318,7 +1336,20 @@ function createHighway() {
                 _setRenderer(_defaultRenderer);
                 _emitVizReverted('draw-failure');
             }
+            return false;
         }
+    }
+
+    function _scheduleDraw(frameTime) {
+        // An external frame host owns scheduling while enabled. A callback
+        // that was queued just before the hand-off is harmless and must not
+        // restart the private loop.
+        if (hwState._externalFrameDriver) {
+            hwState.animFrame = null;
+            return;
+        }
+        hwState.animFrame = requestAnimationFrame(_scheduleDraw);
+        draw(frameTime);
     }
 
     function drawHighway(W, H) {
@@ -2454,7 +2485,7 @@ function createHighway() {
                             // Wait for the off-chain JUCE routing (if any) to settle
                             // so _juceMode is correctly set before _onReady and song:ready fire.
                             await hwState._juceRoutingPromise.catch(() => {});
-                            if (!hwState.animFrame) draw();
+                            if (!hwState.animFrame) _scheduleDraw();
                             if (api._onReady) await Promise.resolve(api._onReady()).catch((err) => console.error('[highway] _onReady error:', err));
                             // Broadcast to interested listeners (e.g. the
                             // difficulty-slider disabled-state update in
@@ -2931,6 +2962,53 @@ function createHighway() {
          * renderer; they're a 2D-only contract.
          */
         setRenderer(r) { _setRenderer(r); },
+        /**
+         * Switch between the private rAF loop and an external frame host.
+         * External callers must invoke renderFrame(timestamp, frameId) once
+         * per visual frame. This is deliberately opt-in so existing plugins
+         * retain their historical scheduling behaviour. The mode persists
+         * across stop()/init(); a host must call this with false during its
+         * own teardown to release the highway back to private scheduling.
+         */
+        setExternalFrameDriver(enabled) {
+            const next = enabled === true;
+            if (hwState._externalFrameDriver === next) return;
+            hwState._externalFrameDriver = next;
+            if (next) {
+                if (hwState.animFrame) {
+                    cancelAnimationFrame(hwState.animFrame);
+                    hwState.animFrame = null;
+                }
+            } else if (hwState.ready && !hwState.animFrame) {
+                _scheduleDraw();
+            }
+        },
+        /**
+         * Render one externally scheduled frame. `frameTime` should be the
+         * timestamp received by requestAnimationFrame; `frameId` is optional
+         * but should be an incrementing integer shared by all panels. It
+         * preserves the host's frame-count throttles (such as visibility
+         * sampling), rather than acting as a timestamp.
+         */
+        renderFrame(frameTime, frameId) {
+            if (!hwState._externalFrameDriver) return;
+            return draw(frameTime, frameId);
+        },
+        /**
+         * Paint an explicit chart time for an offline exporter. Unlike the
+         * normal rAF path, this never reads the audio clock: each call draws
+         * precisely the requested song timestamp, which lets an encoder
+         * compose frames faster than real time without skipping visual state.
+         *
+         * This intentionally does not take ownership of scheduling. Offline
+         * callers may paint while playback is paused, and existing live
+         * renderers keep their private rAF loop unchanged.
+         */
+        renderFrameAt(time) {
+            if (!hwState.ready || !Number.isFinite(time)) return false;
+            api.setTime(time);
+            return draw();
+        },
         /**
          * True when the built-in 2D canvas highway is the active renderer
          * (or none has been installed yet — that resolves to the default

@@ -41,7 +41,7 @@ function extractBlock(src, signature) {
 
 test('core _makeBundle exposes isPlaying derived from the chart-clock anchor', () => {
     const src = fs.readFileSync(highwayJs, 'utf8');
-    const fn = extractBlock(src, 'function _makeBundle()');
+    const fn = extractBlock(src, 'function _makeBundle(frameTime, frameId)');
     // Field present in the bundle.
     assert.match(fn, /\bisPlaying\s*[:=]/, 'bundle must expose isPlaying');
     // It is computed from the same anchor/advance state getTime() uses, not a
