@@ -4368,12 +4368,14 @@
     // "Keys Highway 3D" precedes "Piano Highway" and "Staff View" when all
     // three match.
     //
-    // Vocals/karaoke visualizations own arrangements containing "vocal".
-    // "vox" and sing/singing/singer are word-bounded to avoid unrelated
+    // Vocals/karaoke visualizations own arrangements explicitly classified
+    // as vocals, plus legacy display names containing "vocal". "vox" and
+    // sing/singing/singer/singers/sings are word-bounded to avoid unrelated
     // names such as "Voxel Synth" or "Single Coil Lead".
-    const VOCALS_ARRANGEMENT_RE = /vocal|\bvox\b|\bsing(?:ing|er)?\b/i;
+    const VOCALS_ARRANGEMENT_RE = /vocal|\bvox\b|\bsing(?:ing|ers?|s)?\b/i;
     window.slopsmithViz_keys_highway_3d.matchesArrangement = function (songInfo) {
         if (!songInfo || !songInfo.has_notation) return false;
+        if (songInfo.arrangement_type === 'vocals') return false;
         return !VOCALS_ARRANGEMENT_RE.test(String(songInfo.arrangement || ''));
     };
     // Pure data-layer + scoring hooks for headless tests.
