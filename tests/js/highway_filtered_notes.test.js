@@ -48,9 +48,24 @@ test('getFilteredChords falls through to chords when _filteredChords is null', (
 
 test('highway public API exposes hasPhraseData', () => {
     const src = fs.readFileSync(highwayJs, 'utf8');
+    // hasPhraseData() delegates to _hasRealLadder(), which is what actually
+    // checks phrase data (some phrase has more than one level) rather than
+    // merely whether phrases exist — phrase presence alone is preserved for
+    // Section Practice's timing needs even on a fully-collapsed ladder (see
+    // collapse_arrangement_phrases in lib/song.py), so gating this getter on
+    // _phrases presence would no longer match its documented meaning.
     assert.match(
         src,
-        /hasPhraseData\s*\(\s*\)\s*\{[^}]*_phrases/,
-        'hasPhraseData must reference _phrases',
+        /hasPhraseData\s*\(\s*\)\s*\{[^}]*_hasRealLadder/,
+        'hasPhraseData must reference _hasRealLadder',
+    );
+});
+
+test('_hasRealLadder checks phrase levels, not merely phrase presence', () => {
+    const src = fs.readFileSync(highwayJs, 'utf8');
+    assert.match(
+        src,
+        /function _hasRealLadder\s*\(\s*\)\s*\{[^}]*levels\.length\s*>\s*1/,
+        '_hasRealLadder must check levels.length > 1, not just phrase presence',
     );
 });
