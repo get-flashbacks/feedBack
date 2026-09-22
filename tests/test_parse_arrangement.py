@@ -192,6 +192,59 @@ def test_parse_multi_level_populates_phrase_ladder(tmp_path):
     assert [(n.time, n.fret) for n in arr.notes] == [(1.0, 5), (2.0, 3), (3.0, 7)]
 
 
+# ── Duplicate-content levels (e.g. unsimplified CDLC) collapse at load time ──
+
+def test_parse_collapses_all_identical_duplicate_levels(tmp_path):
+    # A source XML can declare 3 levels per phrase without any of them
+    # actually differing (the known real-world case: a CDLC arrangement
+    # authored/exported without per-difficulty simplification). Every
+    # phrase in this arrangement has this shape, so the whole arrangement's
+    # slider should end up disabled (phrases -> None) rather than moving
+    # without changing anything rendered.
+    dup = [(1.0, 0, 5), (2.0, 1, 3)]
+    xml = _song(
+        '<levels count="3">' + _level(0, dup) + _level(1, dup) + _level(2, dup) + "</levels>",
+        '<phrases><phrase maxDifficulty="2" name="a"/></phrases>',
+        '<phraseIterations><phraseIteration time="0" phraseId="0"/></phraseIterations>',
+    )
+    arr = parse_arrangement(_write_xml(tmp_path, xml))
+
+    assert arr.phrases is None
+    # Flat merge (existing consumers) is unaffected by the collapse.
+    assert [(n.time, n.fret) for n in arr.notes] == [(1.0, 5), (2.0, 3)]
+
+
+def test_parse_windowed_phrase_coincidence_does_not_disable_whole_ladder(tmp_path):
+    # The duplicate-detection check above must run against each level's
+    # FULL, un-windowed content — not a per-phrase time-sliced view. Levels
+    # 0 and 1 genuinely differ globally (level 1 has an extra note later in
+    # the song), so this is a real ladder and must NOT be disabled, even
+    # though phrase 1's own window (t >= 5) happens to slice both levels
+    # down to nothing (its content is an artifact of that phrase's time
+    # range, not evidence the ladder never varied anywhere).
+    xml = _song(
+        '<levels count="2">'
+        + _level(0, [(1.0, 0, 5)])
+        + _level(1, [(1.0, 0, 5), (2.0, 1, 3)])
+        + "</levels>",
+        '<phrases>'
+        '<phrase maxDifficulty="1" name="a"/>'
+        '<phrase maxDifficulty="1" name="b"/>'
+        "</phrases>",
+        '<phraseIterations>'
+        '<phraseIteration time="0" phraseId="0"/>'
+        '<phraseIteration time="5" phraseId="1"/>'
+        "</phraseIterations>",
+    )
+    arr = parse_arrangement(_write_xml(tmp_path, xml))
+
+    assert arr.phrases is not None
+    assert len(arr.phrases) == 2
+    p0, p1 = arr.phrases
+    assert p0.max_difficulty == 1
+    assert len(p0.levels) == 2
+
+
 # ── Single-level XML: no phrase metadata needed ──────────────────────────────
 
 def test_parse_single_level_disables_slider(tmp_path):
@@ -362,10 +415,15 @@ def test_parse_trailing_phrase_iteration_past_last_event(tmp_path):
     # authored note/chord. If song_end were derived from events only,
     # the last phrase would get end_time < start_time — invalid window,
     # empty slice. Bound song_end by iteration start times too.
+    #
+    # Levels must genuinely differ (level 1 adds a note) — a fixture
+    # with fully identical levels would trip the duplicate-ladder
+    # collapse this file also tests, and disable phrases entirely
+    # before this test's own scenario (song_end bounding) even runs.
     xml = _song(
         '<levels count="2">'
         + _level(0, [(1.0, 0, 5)])
-        + _level(1, [(1.0, 0, 5)])
+        + _level(1, [(1.0, 0, 5), (2.0, 1, 3)])
         + "</levels>",
         '<phrases>'
         '<phrase maxDifficulty="1" name="a"/>'
