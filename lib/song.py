@@ -641,6 +641,82 @@ def phrase_from_wire(d: dict) -> Phrase:
     )
 
 
+def _collapse_identical_phrase_levels(phrase: Phrase) -> Phrase:
+    """Merge adjacent `PhraseLevel`s that are fully identical, renumbering
+    `difficulty` 0..k and recomputing `max_difficulty` to match.
+
+    A phrase's declared level count is a claim, not a guarantee, that each
+    tier actually differs from its neighbor — a source chart (most often a
+    CDLC arrangement authored/exported with a tool that never went through
+    per-difficulty simplification) can declare `maxDifficulty=2` with three
+    `<level>` blocks that all carry the exact same notes. Left unfiltered,
+    that reaches the player as a mastery slider that visibly moves but never
+    changes what's rendered — indistinguishable from a real bug from the
+    player's side. `PhraseLevel`/`Note`/`Chord` are plain dataclasses with
+    generated `__eq__`, so comparing their fields directly (no wire-dict
+    normalization needed, unlike a raw JSON comparison) is sufficient to
+    detect a true duplicate.
+
+    Compares `anchors` and `hand_shapes` too, not just `notes`/`chords` —
+    two levels can share identical playable content but still differ in
+    fret-position anchors or fingering/chord-diagram hand shapes (both are
+    display/teaching metadata a phrase level can vary independently of its
+    note content), and collapsing those away would silently make that
+    per-level detail unreachable via the slider.
+
+    Mirrors `difficulty_ladder`'s own `_collapse_identical_levels` (issue
+    #70 there), reimplemented here against the typed dataclasses so the
+    same defense applies to ANY phrase-bearing arrangement at load time —
+    generated or not, GP-derived or CDLC-derived — not just packs that
+    happen to pass through that plugin's generator.
+    """
+    if not phrase.levels:
+        return phrase
+    collapsed: list[PhraseLevel] = [phrase.levels[0]]
+    for lv in phrase.levels[1:]:
+        prev = collapsed[-1]
+        if (lv.notes == prev.notes and lv.chords == prev.chords
+                and lv.anchors == prev.anchors and lv.hand_shapes == prev.hand_shapes):
+            # Keep the later (higher-difficulty) level as the representative,
+            # matching difficulty_ladder's own convention — a source chart's
+            # simplification pass (if any) only ever removes/thins content on
+            # the way down, so the higher-numbered tier is never less
+            # complete than the one it's replacing.
+            collapsed[-1] = lv
+            continue
+        collapsed.append(lv)
+    if len(collapsed) == len(phrase.levels):
+        return phrase
+    for i, lv in enumerate(collapsed):
+        lv.difficulty = i
+    return Phrase(
+        start_time=phrase.start_time,
+        end_time=phrase.end_time,
+        max_difficulty=len(collapsed) - 1,
+        levels=collapsed,
+    )
+
+
+def collapse_arrangement_phrases(phrases: list[Phrase] | None) -> list[Phrase] | None:
+    """Collapse duplicate-content levels on every phrase.
+
+    Always returns the (possibly collapsed) phrase list, never `None`, as
+    long as the input had any phrases — phrase `start_time`/`end_time`
+    windows are needed by consumers (e.g. Section Practice's phrase-sized
+    looping, `highway.getPracticePhrases()`) independently of whether the
+    difficulty ladder is real, so timing must survive even when every
+    phrase collapses down to a single level. The "is there an actual
+    ladder" signal lives downstream in `hasPhraseData()`
+    (`static/highway.js`), which checks whether any phrase's `levels` has
+    more than one entry rather than merely whether phrases exist — so a
+    fully-collapsed arrangement still disables the slider correctly without
+    losing phrase timing.
+    """
+    if not phrases:
+        return None
+    return [_collapse_identical_phrase_levels(p) for p in phrases]
+
+
 def arrangement_is_bass(arr: Arrangement) -> bool:
     """Whether ``arr`` is a bass, most-authoritative signal first: an
     editor-authored ``type == "bass"`` (feedpak-spec §5.2 / editor PR #335,
@@ -990,8 +1066,13 @@ def arrangement_from_wire(d: dict) -> Arrangement:
         # `phrases` is optional — absent on single-level sources / older
         # sloppaks. Preserve None (rather than []) to preserve the
         # "slider disabled" signal downstream; an explicit empty list on
-        # the wire is treated the same as absent.
-        phrases=(
+        # the wire is treated the same as absent. Collapsed through
+        # collapse_arrangement_phrases() so a pack whose declared levels
+        # never actually differ (CDLC-derived packs authored/exported
+        # without per-difficulty simplification are the known real-world
+        # case) reports no ladder rather than a slider that moves but does
+        # nothing — see that function's docstring.
+        phrases=collapse_arrangement_phrases(
             [phrase_from_wire(p) for p in d["phrases"]]
             if d.get("phrases") else None
         ),
@@ -1373,6 +1454,31 @@ def parse_arrangement(xml_path: str) -> Arrangement:
         # A 0.0 floor silently bisect-slices those out of the flat merge.
         _collect_from_parsed(best, float("-inf"), float("inf"))
 
+    def _parsed_levels_all_identical() -> bool:
+        """True when every pre-parsed (whole-arrangement, un-windowed)
+        `<level>` has identical notes/chords/anchors/hand_shapes content —
+        i.e. the XML declares multiple difficulty tiers that never actually
+        differ anywhere in the song. The known real-world case is a CDLC
+        arrangement authored/exported by a tool that never went through
+        per-difficulty simplification, so every declared level just repeats
+        the same content.
+
+        Deliberately checked against the FULL per-level arrays here, not a
+        per-phrase windowed slice: two genuinely different levels can still
+        slice down to an identical (or empty) subset within one short/early
+        phrase window simply because their real differences live later in
+        the song — that's an artifact of this phrase's own time range, not
+        a duplicate ladder, and must not disable the slider for the whole
+        arrangement. Only a true, global duplication should.
+        """
+        values = list(parsed_levels.values())
+        first = values[0]
+        return all(
+            v["notes"] == first["notes"] and v["chords"] == first["chords"]
+            and v["anchors"] == first["anchors"] and v["hand_shapes"] == first["hand_shapes"]
+            for v in values[1:]
+        )
+
     # Per-phrase difficulty data for the master-difficulty slider
     # (feedBack#48). Only populated when the XML has multiple levels AND
     # phrase data — left as None for single-level sources so the frontend
@@ -1493,6 +1599,21 @@ def parse_arrangement(xml_path: str) -> Arrangement:
         if not phrases:
             phrases = None
             _collect_best_level_fallback()
+        elif _parsed_levels_all_identical():
+            # Every declared level is identical everywhere in the song (the
+            # known real-world case: a CDLC arrangement authored/exported
+            # without per-difficulty simplification) — there's no real
+            # ladder anywhere in this arrangement. Collapse every phrase
+            # down to a single level so hasPhraseData() (which checks
+            # levels.length, not phrase presence) correctly disables the
+            # slider, but KEEP each phrase's own start_time/end_time —
+            # Section Practice's phrase-sized looping depends on that
+            # timing regardless of whether the ladder is real.
+            phrases = [
+                Phrase(start_time=p.start_time, end_time=p.end_time,
+                       max_difficulty=0, levels=p.levels[:1])
+                for p in phrases
+            ]
     elif parsed_levels:
         _collect_best_level_fallback()
 

@@ -601,7 +601,7 @@ function createHighway() {
 
         // Master-difficulty (feedBack#48)
         b.mastery = hwState._mastery;
-        b.hasPhraseData = !!(hwState._phrases && hwState._phrases.length > 0);
+        b.hasPhraseData = _hasRealLadder();
         // When phrase data authored ANY handshape, respect the filtered
         // list strictly (even when this difficulty leaves it empty) —
         // otherwise low-mastery levels would surface arp hints that
@@ -1513,6 +1513,23 @@ function createHighway() {
         hwState._chordRenderCacheTemplates = null;
     }
 
+    // True only when at least one phrase actually offers more than one
+    // difficulty level — i.e. the mastery slider can change what's
+    // rendered SOMEWHERE in the song. Deliberately stricter than "phrases
+    // is non-empty": lib/song.py can (and, for a source whose declared
+    // levels never differ in content, does) still emit phrase objects with
+    // real start_time/end_time so Section Practice keeps per-phrase
+    // looping granularity, even on a chart with no usable difficulty
+    // ladder — those phrases just collapse down to a single level each.
+    // Gating hasPhraseData on phrase presence alone would re-enable a
+    // slider that visibly does nothing, the exact bug this distinction
+    // exists to prevent.
+    function _hasRealLadder() {
+        return !!(hwState._phrases && hwState._phrases.some(
+            (p) => Array.isArray(p.levels) && p.levels.length > 1,
+        ));
+    }
+
     // Rebuild the mastery-filtered note/chord arrays from _phrases +
     // _mastery. Called on `ready` and on every setMastery(). When
     // _phrases is null (slider-disabled source), we clear the filtered
@@ -1880,12 +1897,10 @@ function createHighway() {
             _rebuildMasteryFilter();
         },
         getMastery() { return hwState._mastery; },
-        // Align with _rebuildMasteryFilter's own "null OR empty → fall
-        // through" check. If we returned true for _phrases = [], the
-        // slider would be enabled (via song:ready's hasPhraseData) but
-        // dragging it would do nothing (filter stays null). Same
-        // sentinel, same check, single source of truth.
-        hasPhraseData() { return !!(hwState._phrases && hwState._phrases.length > 0); },
+        // Single source of truth shared with the ready-bundle field above
+        // (see _hasRealLadder) — true only when some phrase actually has
+        // more than one level, not merely when phrase timing exists.
+        hasPhraseData() { return _hasRealLadder(); },
         // Lightweight phrase windows for Section Practice — timing only, no note payloads.
         getPracticePhrases() {
             if (!hwState._phrases || !hwState._phrases.length) return null;
