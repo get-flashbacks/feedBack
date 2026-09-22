@@ -7,8 +7,18 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const SCREEN_JS = path.join(
-    __dirname, '..', '..', 'plugins', 'keys_highway_3d', 'screen.js',
+const PLUGINS_DIR = path.resolve(__dirname, '..', '..', 'plugins');
+const SCREEN_JS = path.resolve(PLUGINS_DIR, 'keys_highway_3d', 'screen.js');
+const screenRelativePath = path.relative(PLUGINS_DIR, SCREEN_JS);
+
+// Keep the test's filesystem read confined to the repository plugins tree.
+// This is intentionally checked before readFileSync rather than relying on
+// the fact that the path currently comes from test constants.
+assert.ok(
+    screenRelativePath
+        && !screenRelativePath.startsWith(`..${path.sep}`)
+        && !path.isAbsolute(screenRelativePath),
+    'screen.js must resolve inside the plugins directory',
 );
 
 function loadMatchesArrangement() {
@@ -29,6 +39,8 @@ test('yields notated vocal arrangements to a vocals visualization', () => {
         'Sing',
         'Singing',
         'Singer',
+        'Singers',
+        'Sings',
     ]) {
         assert.equal(
             matchesArrangement({ has_notation: true, arrangement }),
@@ -36,6 +48,20 @@ test('yields notated vocal arrangements to a vocals visualization', () => {
             `must yield '${arrangement}'`,
         );
     }
+});
+
+test('yields arrangements authoritatively classified as vocals', () => {
+    const matchesArrangement = loadMatchesArrangement();
+
+    assert.equal(
+        matchesArrangement({
+            has_notation: true,
+            arrangement_type: 'vocals',
+            arrangement: 'Harmony',
+        }),
+        false,
+        'must yield an authoritatively vocal arrangement despite its custom name',
+    );
 });
 
 test('still claims ordinary notated arrangements', () => {
