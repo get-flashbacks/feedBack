@@ -2521,6 +2521,26 @@ function createHighway() {
                 hwState._chartLastAdvanceAt = newPerfNow;
             }
         },
+
+        /** Render one deterministic frame at an explicit song time. */
+        renderFrameAt(t) {
+            const time = Number(t);
+            if (!Number.isFinite(time) || !hwState.ready || !hwState._renderer) return false;
+            this.setTime(time);
+            const bundle = hwState._renderer === _defaultRenderer ? undefined : _makeBundle();
+            // Custom renderers must treat the supplied timestamp as authoritative
+            // instead of interpolating it with performance.now().
+            if (bundle) bundle.isPlaying = false;
+            try {
+                hwState._renderer.draw(bundle);
+                return true;
+            } catch (e) {
+                console.error('renderer offline frame:', e);
+                return false;
+            }
+        },
+
+        getCanvas() { return hwState.canvas; },
         setAvOffset(ms) { hwState.avOffsetSec = (Number(ms) || 0) / 1000; hwState.currentTime = hwState.chartTime + hwState.avOffsetSec; },
         getAvOffset() { return hwState.avOffsetSec * 1000; },
 
