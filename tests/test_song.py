@@ -811,10 +811,12 @@ def test_arrangement_from_wire_collapses_identical_phrase_levels():
     # (max_difficulty=2) but every level carries byte-identical notes/chords
     # — the source authoring tool never actually simplified anything. The
     # mastery slider would move but render the same content at every
-    # position. This must collapse down to a single level per phrase and,
-    # since every phrase in the arrangement has this shape, disable the
-    # slider entirely (phrases -> None) rather than leave a dead-but-enabled
-    # control.
+    # position. This must collapse down to a single level per phrase.
+    # Phrase timing (start_time/end_time) is NOT discarded even though
+    # every phrase collapses — Section Practice's phrase-sized looping
+    # (highway.getPracticePhrases()) needs it independently of whether the
+    # ladder is real; hasPhraseData() is what disables the slider, by
+    # checking levels.length rather than mere phrase presence.
     dup_notes = [{"t": 1.0, "s": 0, "f": 3}, {"t": 2.5, "s": 1, "f": 5}]
     wire = {
         "name": "Lead",
@@ -837,7 +839,12 @@ def test_arrangement_from_wire_collapses_identical_phrase_levels():
         ],
     }
     arr = arrangement_from_wire(wire)
-    assert arr.phrases is None
+    assert arr.phrases is not None
+    assert len(arr.phrases) == 2
+    assert [p.start_time for p in arr.phrases] == [0.0, 8.0]
+    assert [p.end_time for p in arr.phrases] == [8.0, 16.0]
+    assert all(len(p.levels) == 1 for p in arr.phrases)
+    assert all(p.max_difficulty == 0 for p in arr.phrases)
 
 
 def test_arrangement_from_wire_preserves_partial_real_ladder():

@@ -198,9 +198,10 @@ def test_parse_collapses_all_identical_duplicate_levels(tmp_path):
     # A source XML can declare 3 levels per phrase without any of them
     # actually differing (the known real-world case: a CDLC arrangement
     # authored/exported without per-difficulty simplification). Every
-    # phrase in this arrangement has this shape, so the whole arrangement's
-    # slider should end up disabled (phrases -> None) rather than moving
-    # without changing anything rendered.
+    # phrase in this arrangement has this shape, so every phrase should
+    # collapse to a single level (disabling the slider via
+    # hasPhraseData()'s levels.length check) — but phrase timing itself
+    # (start_time/end_time) must survive for Section Practice.
     dup = [(1.0, 0, 5), (2.0, 1, 3)]
     xml = _song(
         '<levels count="3">' + _level(0, dup) + _level(1, dup) + _level(2, dup) + "</levels>",
@@ -209,7 +210,11 @@ def test_parse_collapses_all_identical_duplicate_levels(tmp_path):
     )
     arr = parse_arrangement(_write_xml(tmp_path, xml))
 
-    assert arr.phrases is None
+    assert arr.phrases is not None
+    assert len(arr.phrases) == 1
+    assert arr.phrases[0].start_time == 0.0
+    assert len(arr.phrases[0].levels) == 1
+    assert arr.phrases[0].max_difficulty == 0
     # Flat merge (existing consumers) is unaffected by the collapse.
     assert [(n.time, n.fret) for n in arr.notes] == [(1.0, 5), (2.0, 3)]
 

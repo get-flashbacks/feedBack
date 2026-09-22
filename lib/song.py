@@ -698,21 +698,23 @@ def _collapse_identical_phrase_levels(phrase: Phrase) -> Phrase:
 
 
 def collapse_arrangement_phrases(phrases: list[Phrase] | None) -> list[Phrase] | None:
-    """Collapse duplicate-content levels on every phrase, then, if that
-    leaves NO phrase with more than one level (i.e. the whole arrangement's
-    "ladder" never actually varied), drop phrase data entirely so
-    `hasPhraseData` reports `False` and the mastery slider disables itself
-    with an honest reason, instead of staying enabled over data that can't
-    move it. A partial ladder (some phrases genuinely multi-level, others
-    collapsed to one) is preserved as-is — the slider still does something
-    real on those phrases.
+    """Collapse duplicate-content levels on every phrase.
+
+    Always returns the (possibly collapsed) phrase list, never `None`, as
+    long as the input had any phrases — phrase `start_time`/`end_time`
+    windows are needed by consumers (e.g. Section Practice's phrase-sized
+    looping, `highway.getPracticePhrases()`) independently of whether the
+    difficulty ladder is real, so timing must survive even when every
+    phrase collapses down to a single level. The "is there an actual
+    ladder" signal lives downstream in `hasPhraseData()`
+    (`static/highway.js`), which checks whether any phrase's `levels` has
+    more than one entry rather than merely whether phrases exist — so a
+    fully-collapsed arrangement still disables the slider correctly without
+    losing phrase timing.
     """
     if not phrases:
         return None
-    collapsed = [_collapse_identical_phrase_levels(p) for p in phrases]
-    if all(len(p.levels) <= 1 for p in collapsed):
-        return None
-    return collapsed
+    return [_collapse_identical_phrase_levels(p) for p in phrases]
 
 
 def arrangement_is_bass(arr: Arrangement) -> bool:
@@ -1483,13 +1485,8 @@ def parse_arrangement(xml_path: str) -> Arrangement:
     # knows to disable the slider.
     phrases: list[Phrase] | None = None
 
-    # If there's only one level, use it directly (no per-phrase merge
-    # needed) — and treat multiple declared levels that never actually
-    # differ (see _parsed_levels_all_identical) exactly the same way: flat-
-    # merge the first level and leave the slider disabled, rather than
-    # running the phrase merge below only to produce a ladder that never
-    # renders anything different at any position.
-    if len(parsed_levels) == 1 or (len(parsed_levels) > 1 and _parsed_levels_all_identical()):
+    # If there's only one level, use it directly (no per-phrase merge needed)
+    if len(parsed_levels) == 1:
         # See _collect_best_level_fallback above re: -inf floor.
         _collect_from_parsed(next(iter(parsed_levels.values())), float("-inf"), float("inf"))
     # Merge per-phrase if we have phrase data and multiple levels
@@ -1602,6 +1599,21 @@ def parse_arrangement(xml_path: str) -> Arrangement:
         if not phrases:
             phrases = None
             _collect_best_level_fallback()
+        elif _parsed_levels_all_identical():
+            # Every declared level is identical everywhere in the song (the
+            # known real-world case: a CDLC arrangement authored/exported
+            # without per-difficulty simplification) — there's no real
+            # ladder anywhere in this arrangement. Collapse every phrase
+            # down to a single level so hasPhraseData() (which checks
+            # levels.length, not phrase presence) correctly disables the
+            # slider, but KEEP each phrase's own start_time/end_time —
+            # Section Practice's phrase-sized looping depends on that
+            # timing regardless of whether the ladder is real.
+            phrases = [
+                Phrase(start_time=p.start_time, end_time=p.end_time,
+                       max_difficulty=0, levels=p.levels[:1])
+                for p in phrases
+            ]
     elif parsed_levels:
         _collect_best_level_fallback()
 
