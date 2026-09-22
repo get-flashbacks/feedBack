@@ -19,6 +19,7 @@ from song import (
     chord_from_wire,
     chord_template_to_wire,
     chord_to_wire,
+    collapse_arrangement_phrases,
     sanitize_tempos,
     compute_smart_names,
     base_open_string_midis,
@@ -803,6 +804,94 @@ def test_arrangement_from_wire_empty_phrases_list_becomes_none():
     # to the None sentinel so the slider-disabled signal is preserved.
     arr = arrangement_from_wire({"name": "X", "phrases": []})
     assert arr.phrases is None
+
+
+def test_arrangement_from_wire_collapses_identical_phrase_levels():
+    # Reproduces a real-world CDLC-derived pack: a phrase declares 3 levels
+    # (max_difficulty=2) but every level carries byte-identical notes/chords
+    # — the source authoring tool never actually simplified anything. The
+    # mastery slider would move but render the same content at every
+    # position. This must collapse down to a single level per phrase and,
+    # since every phrase in the arrangement has this shape, disable the
+    # slider entirely (phrases -> None) rather than leave a dead-but-enabled
+    # control.
+    dup_notes = [{"t": 1.0, "s": 0, "f": 3}, {"t": 2.5, "s": 1, "f": 5}]
+    wire = {
+        "name": "Lead",
+        "phrases": [
+            {
+                "start_time": 0.0, "end_time": 8.0, "max_difficulty": 2,
+                "levels": [
+                    {"difficulty": 0, "notes": dup_notes, "chords": []},
+                    {"difficulty": 1, "notes": dup_notes, "chords": []},
+                    {"difficulty": 2, "notes": dup_notes, "chords": []},
+                ],
+            },
+            {
+                "start_time": 8.0, "end_time": 16.0, "max_difficulty": 1,
+                "levels": [
+                    {"difficulty": 0, "notes": dup_notes, "chords": []},
+                    {"difficulty": 1, "notes": dup_notes, "chords": []},
+                ],
+            },
+        ],
+    }
+    arr = arrangement_from_wire(wire)
+    assert arr.phrases is None
+
+
+def test_arrangement_from_wire_preserves_partial_real_ladder():
+    # A mix: one phrase has a genuine ladder (levels actually differ), the
+    # other is a duplicate-content phrase like above. The arrangement-wide
+    # slider should stay enabled (some phrase can actually change), and the
+    # duplicate phrase should still collapse down to one level on its own.
+    easy = [{"t": 1.0, "s": 0, "f": 0}]
+    hard = [{"t": 1.0, "s": 0, "f": 0}, {"t": 1.5, "s": 1, "f": 5}]
+    dup = [{"t": 9.0, "s": 0, "f": 2}]
+    wire = {
+        "name": "Lead",
+        "phrases": [
+            {
+                "start_time": 0.0, "end_time": 8.0, "max_difficulty": 1,
+                "levels": [
+                    {"difficulty": 0, "notes": easy, "chords": []},
+                    {"difficulty": 1, "notes": hard, "chords": []},
+                ],
+            },
+            {
+                "start_time": 8.0, "end_time": 16.0, "max_difficulty": 1,
+                "levels": [
+                    {"difficulty": 0, "notes": dup, "chords": []},
+                    {"difficulty": 1, "notes": dup, "chords": []},
+                ],
+            },
+        ],
+    }
+    arr = arrangement_from_wire(wire)
+    assert arr.phrases is not None
+    assert len(arr.phrases) == 2
+    assert arr.phrases[0].max_difficulty == 1
+    assert len(arr.phrases[0].levels) == 2
+    # The duplicate-content phrase collapsed to a single level.
+    assert arr.phrases[1].max_difficulty == 0
+    assert len(arr.phrases[1].levels) == 1
+
+
+def test_collapse_arrangement_phrases_keeps_distinct_levels_untouched():
+    # A well-formed multi-level phrase must round-trip unchanged — the
+    # collapse pass is a no-op when levels genuinely differ.
+    p = Phrase(
+        start_time=0.0, end_time=8.0, max_difficulty=1,
+        levels=[
+            PhraseLevel(difficulty=0, notes=[Note(time=1.0, string=0, fret=0)]),
+            PhraseLevel(difficulty=1, notes=[
+                Note(time=1.0, string=0, fret=0),
+                Note(time=2.0, string=0, fret=2),
+            ]),
+        ],
+    )
+    result = collapse_arrangement_phrases([p])
+    assert result == [p]
 
 
 def test_phrase_wire_is_json_safe():

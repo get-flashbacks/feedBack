@@ -641,6 +641,72 @@ def phrase_from_wire(d: dict) -> Phrase:
     )
 
 
+def _collapse_identical_phrase_levels(phrase: Phrase) -> Phrase:
+    """Merge adjacent `PhraseLevel`s whose notes/chords are identical,
+    renumbering `difficulty` 0..k and recomputing `max_difficulty` to match.
+
+    A phrase's declared level count is a claim, not a guarantee, that each
+    tier actually differs from its neighbor — a source chart (most often a
+    CDLC arrangement authored/exported with a tool that never went through
+    per-difficulty simplification) can declare `maxDifficulty=2` with three
+    `<level>` blocks that all carry the exact same notes. Left unfiltered,
+    that reaches the player as a mastery slider that visibly moves but never
+    changes what's rendered — indistinguishable from a real bug from the
+    player's side. `PhraseLevel`/`Note`/`Chord` are plain dataclasses with
+    generated `__eq__`, so comparing their `notes`/`chords` lists directly
+    (no wire-dict normalization needed, unlike a raw JSON comparison) is
+    sufficient to detect a true duplicate.
+
+    Mirrors `difficulty_ladder`'s own `_collapse_identical_levels` (issue
+    #70 there), reimplemented here against the typed dataclasses so the
+    same defense applies to ANY phrase-bearing arrangement at load time —
+    generated or not, GP-derived or CDLC-derived — not just packs that
+    happen to pass through that plugin's generator.
+    """
+    if not phrase.levels:
+        return phrase
+    collapsed: list[PhraseLevel] = [phrase.levels[0]]
+    for lv in phrase.levels[1:]:
+        prev = collapsed[-1]
+        if lv.notes == prev.notes and lv.chords == prev.chords:
+            # Keep the later (higher-difficulty) level as the representative,
+            # matching difficulty_ladder's own convention — a source chart's
+            # simplification pass (if any) only ever removes/thins content on
+            # the way down, so the higher-numbered tier is never less
+            # complete than the one it's replacing.
+            collapsed[-1] = lv
+            continue
+        collapsed.append(lv)
+    if len(collapsed) == len(phrase.levels):
+        return phrase
+    for i, lv in enumerate(collapsed):
+        lv.difficulty = i
+    return Phrase(
+        start_time=phrase.start_time,
+        end_time=phrase.end_time,
+        max_difficulty=len(collapsed) - 1,
+        levels=collapsed,
+    )
+
+
+def collapse_arrangement_phrases(phrases: list[Phrase] | None) -> list[Phrase] | None:
+    """Collapse duplicate-content levels on every phrase, then, if that
+    leaves NO phrase with more than one level (i.e. the whole arrangement's
+    "ladder" never actually varied), drop phrase data entirely so
+    `hasPhraseData` reports `False` and the mastery slider disables itself
+    with an honest reason, instead of staying enabled over data that can't
+    move it. A partial ladder (some phrases genuinely multi-level, others
+    collapsed to one) is preserved as-is — the slider still does something
+    real on those phrases.
+    """
+    if not phrases:
+        return None
+    collapsed = [_collapse_identical_phrase_levels(p) for p in phrases]
+    if all(len(p.levels) <= 1 for p in collapsed):
+        return None
+    return collapsed
+
+
 def arrangement_is_bass(arr: Arrangement) -> bool:
     """Whether ``arr`` is a bass, most-authoritative signal first: an
     editor-authored ``type == "bass"`` (feedpak-spec §5.2 / editor PR #335,
@@ -990,8 +1056,13 @@ def arrangement_from_wire(d: dict) -> Arrangement:
         # `phrases` is optional — absent on single-level sources / older
         # sloppaks. Preserve None (rather than []) to preserve the
         # "slider disabled" signal downstream; an explicit empty list on
-        # the wire is treated the same as absent.
-        phrases=(
+        # the wire is treated the same as absent. Collapsed through
+        # collapse_arrangement_phrases() so a pack whose declared levels
+        # never actually differ (CDLC-derived packs authored/exported
+        # without per-difficulty simplification are the known real-world
+        # case) reports no ladder rather than a slider that moves but does
+        # nothing — see that function's docstring.
+        phrases=collapse_arrangement_phrases(
             [phrase_from_wire(p) for p in d["phrases"]]
             if d.get("phrases") else None
         ),
@@ -1493,6 +1564,15 @@ def parse_arrangement(xml_path: str) -> Arrangement:
         if not phrases:
             phrases = None
             _collect_best_level_fallback()
+        else:
+            # A source XML can declare multiple <level> blocks per phrase
+            # without any of them actually differing (see
+            # collapse_arrangement_phrases's docstring — the known
+            # real-world case is a CDLC arrangement authored/exported
+            # without per-difficulty simplification). Collapse those down
+            # so hasPhraseData reflects a ladder that can actually move
+            # something, not just one that was declared.
+            phrases = collapse_arrangement_phrases(phrases)
     elif parsed_levels:
         _collect_best_level_fallback()
 
