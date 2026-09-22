@@ -4362,12 +4362,21 @@
     // Static contextType so core can make canvas-swap decisions before
     // constructing a renderer instance (and gate Auto on WebGL2).
     window.slopsmithViz_keys_highway_3d.contextType = 'webgl2';
-    // Auto-select on arrangements that carry notation (sloppak-spec §5.3).
-    // Predicates receive the raw song_info wire frame — snake_case field.
-    // Directory name `keys_highway_3d` sorts before `piano` and `staffview`
-    // so Auto prefers the 3D highway when all three match.
+    // Auto-select on non-vocals arrangements that carry notation
+    // (sloppak-spec §5.3). Predicates receive the raw song_info wire frame —
+    // snake_case fields. Core orders Auto candidates by display name, so
+    // "Keys Highway 3D" precedes "Piano Highway" and "Staff View" when all
+    // three match.
+    //
+    // Vocals/karaoke visualizations own arrangements explicitly classified
+    // as vocals, plus legacy display names containing "vocal". "vox" and
+    // sing/singing/singer/singers/sings are word-bounded to avoid unrelated
+    // names such as "Voxel Synth" or "Single Coil Lead".
+    const VOCALS_ARRANGEMENT_RE = /vocal|\bvox\b|\bsing(?:ing|ers?|s)?\b/i;
     window.slopsmithViz_keys_highway_3d.matchesArrangement = function (songInfo) {
-        return !!(songInfo && songInfo.has_notation);
+        if (!songInfo || !songInfo.has_notation) return false;
+        if (songInfo.arrangement_type === 'vocals') return false;
+        return !VOCALS_ARRANGEMENT_RE.test(String(songInfo.arrangement || ''));
     };
     // Pure data-layer + scoring hooks for headless tests.
     window.slopsmithViz_keys_highway_3d.__test = {
