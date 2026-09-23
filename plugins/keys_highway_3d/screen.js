@@ -744,6 +744,13 @@
     // a render stall or backgrounded tab advances both clocks together and
     // is NOT a seek (the miss sweep must still count notes elapsed during a
     // stall). Returns 'back' | 'forward' | null. Pure.
+    // Known limitation: this only sees the per-frame delta, so a slow
+    // continuous scrub can hide inside the thresholds below — a backward
+    // drag under SEEK_BACK_EPS_S/frame, or a paused forward scrub under
+    // SEEK_FWD_SLACK_S, isn't classified as a seek. The reported repros
+    // (←/→, Section Practice wrap, loop) are all well outside these bands.
+    // A real fix would hook the transport's own seek signal directly rather
+    // than inferring one from consecutive frames.
     const SEEK_BACK_EPS_S = 0.1;
     const SEEK_FWD_SLACK_S = 0.5;
     const SEEK_MAX_RATE = 2;
