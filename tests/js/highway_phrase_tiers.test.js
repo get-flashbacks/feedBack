@@ -24,10 +24,11 @@ function extractFunction(src, name) {
     assert.fail(`${name} body is balanced`);
 }
 
-// require.resolve with a literal specifier, inline (as in keys_highway_3d's
-// instance_invariants test): the module system resolves the path, so there
-// is no runtime path construction. highway.js is only read, not loaded.
-const src = fs.readFileSync(require.resolve('../../static/highway.js'), 'utf8');
+// A fixed, repo-relative file resolved by the module system from a literal
+// specifier; no input reaches this path. The path-traversal rule flags any
+// non-literal fs argument, so it is suppressed for this one line.
+// highway.js is only read, not loaded.
+const src = fs.readFileSync(require.resolve('../../static/highway.js'), 'utf8'); // nosemgrep
 // The helpers are pure and dependency-free, so they run in an empty vm
 // context; their top-level declarations land on the sandbox.
 const sandbox = {};
