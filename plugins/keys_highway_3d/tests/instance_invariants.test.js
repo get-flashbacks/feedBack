@@ -7,7 +7,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const src = fs.readFileSync(path.join(__dirname, '..', 'screen.js'), 'utf8');
+const src = fs.readFileSync(path.resolve(__dirname, '..', 'screen.js'), 'utf8');
 
 test('a hit or scoring reset restores a key flashing red, not just forgets it', () => {
     // The wrong-note flash overwrites the key's emissive COLOR; the per-frame
