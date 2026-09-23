@@ -884,6 +884,47 @@ def test_arrangement_from_wire_preserves_partial_real_ladder():
     assert len(arr.phrases[1].levels) == 1
 
 
+def test_collapse_keeps_tier_numbers_when_a_ladder_partially_collapses():
+    # Levels 1..3 are identical. The surviving level must keep the tier
+    # where that content starts (1) and the phrase its max_difficulty (3),
+    # so the highway still plays it from the second slider band on instead
+    # of stretching two levels across the whole slider.
+    easy = [Note(time=1.0, string=0, fret=0)]
+    full = [Note(time=1.0, string=0, fret=0), Note(time=2.0, string=0, fret=2)]
+    p = Phrase(
+        start_time=0.0, end_time=8.0, max_difficulty=3,
+        levels=[
+            PhraseLevel(difficulty=0, notes=list(easy)),
+            PhraseLevel(difficulty=1, notes=list(full)),
+            PhraseLevel(difficulty=2, notes=list(full)),
+            PhraseLevel(difficulty=3, notes=list(full)),
+        ],
+    )
+    (result,) = collapse_arrangement_phrases([p])
+    assert result.max_difficulty == 3
+    assert [lv.difficulty for lv in result.levels] == [0, 1]
+    assert result.levels[1].notes == full
+
+
+def test_sparse_generated_tiers_round_trip_through_the_wire():
+    # difficulty_ladder writes collapsed ladders with sparse tier numbers.
+    wire = {
+        "name": "Lead",
+        "phrases": [{
+            "start_time": 0.0, "end_time": 8.0, "max_difficulty": 3,
+            "levels": [
+                {"difficulty": 0, "notes": [{"t": 1.0, "s": 0, "f": 0}], "chords": []},
+                {"difficulty": 2, "notes": [{"t": 1.0, "s": 0, "f": 0}, {"t": 2.0, "s": 0, "f": 2}],
+                 "chords": []},
+            ],
+        }],
+    }
+    arr = arrangement_from_wire(wire)
+    (p,) = arr.phrases
+    assert p.max_difficulty == 3
+    assert [lv.difficulty for lv in p.levels] == [0, 2]
+
+
 def test_collapse_arrangement_phrases_keeps_distinct_levels_untouched():
     # A well-formed multi-level phrase must round-trip unchanged — the
     # collapse pass is a no-op when levels genuinely differ.

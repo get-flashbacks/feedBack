@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Mastery slider maps through phrase tier numbers.** A phrase's `max_difficulty` now defines its tier scale and each level's `difficulty` the tier where its content starts: the slider picks tier `floor(mastery * (max_difficulty + 1))` and the phrase plays its last level at or below it (`phraseLevelIndexForMastery`, `static/highway.js`). Fully authored ladders (levels `0..n-1`) map exactly as before. `collapse_arrangement_phrases()` (`lib/song.py`) no longer renumbers a partially collapsed ladder to `0..k`; surviving levels keep the tier where their content first appears and the phrase keeps its `max_difficulty`, so a level still covers the slider band it was authored for instead of being stretched across the whole slider (a phrase collapsed to one level still reports `max_difficulty` 0). This lets difficulty_ladder's generated ladders share one song-wide scale, so a slider position means the same difficulty in every phrase. `highway.getPhrases()` additionally reports `top_difficulty`, the tier from which a phrase plays in full.
 - **highway_3d: chord diagram widget lingers longer before fading** (`plugins/highway_3d`). The floating chord-shape diagram was visible for only ~0.55s after a chord's onset, reported (against the wrong repo — `feedBack-plugin-fretboard`#2/#3) as "appears and disappears too quickly to read or form the shape." Roughly doubled to 1.1s. See #72 for the cross-repo mismatch this traces back to.
 
 ### Security

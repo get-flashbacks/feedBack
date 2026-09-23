@@ -642,8 +642,11 @@ def phrase_from_wire(d: dict) -> Phrase:
 
 
 def _collapse_identical_phrase_levels(phrase: Phrase) -> Phrase:
-    """Merge adjacent `PhraseLevel`s that are fully identical, renumbering
-    `difficulty` 0..k and recomputing `max_difficulty` to match.
+    """Merge adjacent `PhraseLevel`s that are fully identical. Each surviving
+    level keeps the `difficulty` (tier) where its content first appears and
+    the phrase keeps `max_difficulty`, so tier numbers can become sparse
+    (e.g. 0, 1, 3 of 0..3); a phrase left with a single level reports
+    `max_difficulty=0` (no ladder).
 
     A phrase's declared level count is a claim, not a guarantee, that each
     tier actually differs from its neighbor — a source chart (most often a
@@ -677,22 +680,34 @@ def _collapse_identical_phrase_levels(phrase: Phrase) -> Phrase:
         prev = collapsed[-1]
         if (lv.notes == prev.notes and lv.chords == prev.chords
                 and lv.anchors == prev.anchors and lv.hand_shapes == prev.hand_shapes):
-            # Keep the later (higher-difficulty) level as the representative,
-            # matching difficulty_ladder's own convention — a source chart's
-            # simplification pass (if any) only ever removes/thins content on
-            # the way down, so the higher-numbered tier is never less
-            # complete than the one it's replacing.
+            # Keep the later (higher-difficulty) level's content as the
+            # representative, matching difficulty_ladder's own convention —
+            # a source chart's simplification pass (if any) only ever
+            # removes/thins content on the way down, so the higher-numbered
+            # tier is never less complete than the one it's replacing — but
+            # keep the tier number where that content FIRST appears.
+            lv.difficulty = prev.difficulty
             collapsed[-1] = lv
             continue
         collapsed.append(lv)
     if len(collapsed) == len(phrase.levels):
         return phrase
-    for i, lv in enumerate(collapsed):
-        lv.difficulty = i
+    if len(collapsed) == 1:
+        # No ladder left in this phrase at all.
+        collapsed[0].difficulty = 0
+        return Phrase(start_time=phrase.start_time, end_time=phrase.end_time,
+                      max_difficulty=0, levels=collapsed)
+    # Surviving levels keep their (now sparse) tier numbers and the phrase
+    # keeps its max_difficulty, so each level still covers the slider band
+    # its content was authored for — the highway maps the slider onto
+    # max_difficulty + 1 tiers and plays the last level at or below the
+    # current tier (static/highway.js phraseLevelIndexForMastery).
+    # Renumbering 0..k here used to stretch a partially collapsed ladder
+    # across the whole slider, moving where each level starts.
     return Phrase(
         start_time=phrase.start_time,
         end_time=phrase.end_time,
-        max_difficulty=len(collapsed) - 1,
+        max_difficulty=phrase.max_difficulty,
         levels=collapsed,
     )
 
