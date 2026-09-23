@@ -27,9 +27,9 @@ test('getPhrases returns null when _phrases is falsy or empty', () => {
     );
 });
 
-test('getPhrases maps phrases to index, start_time, end_time, max_difficulty', () => {
+test('getPhrases maps all documented phrase fields', () => {
     const src = fs.readFileSync(highwayJs, 'utf8');
-    // Match all four fields within a reasonable window after getPhrases
+    // Match all fields within a reasonable window after getPhrases
     const match = src.match(/getPhrases\s*\(\s*\)([\s\S]{0,400})/);
     assert.ok(match, 'getPhrases not found in highway.js');
     const block = match[1];
@@ -37,6 +37,16 @@ test('getPhrases maps phrases to index, start_time, end_time, max_difficulty', (
     assert.ok(block.includes('end_time'), 'getPhrases must expose end_time');
     assert.ok(block.includes('max_difficulty'), 'getPhrases must expose max_difficulty');
     assert.ok(block.includes('index'), 'getPhrases must expose index');
+    // Regression guard (CodeRabbit, PR #97): top_difficulty must come from
+    // phraseTopDifficulty(p.levels), not just be present as a key -- a
+    // regression that quietly replaced it with p.max_difficulty (defeating
+    // the whole point of the field for a phrase that completes early) would
+    // otherwise still pass the plain block.includes() checks above.
+    assert.match(
+        block,
+        /top_difficulty:\s*phraseTopDifficulty\(p\.levels\s*\|\|\s*\[\]\)/,
+        'getPhrases must expose top_difficulty computed via phraseTopDifficulty(p.levels)',
+    );
 });
 
 test('highway public API exposes getMastery', () => {
