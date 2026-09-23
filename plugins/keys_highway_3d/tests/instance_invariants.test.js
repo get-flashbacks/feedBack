@@ -29,7 +29,16 @@ test('updateScene detects seeks before the miss sweep', () => {
     const seekAt = body[0].search(/classifySeek\(_latestTime,\s*now,/);
     const sweepAt = body[0].search(/sweepMissed\(/);
     assert.ok(seekAt > 0 && sweepAt > seekAt, 'seek handling must run before sweepMissed');
-    assert.match(src, /function _onSeek\(kind, now\)\s*\{[\s\S]*?forgetJudgmentsFrom\(_hitNoteKeys[\s\S]*?_anchorMissSweep\(now\)/);
+    // Scope to _onSeek's own body (a single bounded match) rather than one
+    // regex chaining two unbounded [\s\S]* wildcards, which static analysis
+    // flags as a polynomial-backtracking (ReDoS) shape regardless of the
+    // fact that it only ever matches this fixed local source file.
+    const onSeek = src.match(/function _onSeek\(kind, now\)\s*\{[\s\S]*?\n {8}\}\n/);
+    assert.ok(onSeek, '_onSeek not found');
+    const forgetAt = onSeek[0].search(/forgetJudgmentsFrom\(_hitNoteKeys/);
+    const anchorAt = onSeek[0].search(/_anchorMissSweep\(now\)/);
+    assert.ok(forgetAt > 0 && anchorAt > forgetAt,
+        '_onSeek must forget judgments before re-anchoring the sweep');
 });
 
 test('a superseded init() cannot build a second renderer', () => {
