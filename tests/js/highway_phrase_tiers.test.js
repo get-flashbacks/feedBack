@@ -6,9 +6,11 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const path = require('node:path');
+const vm = require('node:vm');
 
-const highwayJs = path.join(__dirname, '..', '..', 'static', 'highway.js');
+// A literal specifier resolved by the module system (no runtime path
+// construction); highway.js itself is not loaded, only read.
+const highwayJs = require.resolve('../../static/highway.js');
 
 function extractFunction(src, name) {
     const start = src.indexOf(`function ${name}(`);
@@ -26,12 +28,15 @@ function extractFunction(src, name) {
 }
 
 const src = fs.readFileSync(highwayJs, 'utf8');
-const { phraseLevelIndexForMastery, phraseTopDifficulty } = new Function(`
-    ${extractFunction(src, 'phraseLevelTiers')}
-    ${extractFunction(src, 'phraseLevelIndexForMastery')}
-    ${extractFunction(src, 'phraseTopDifficulty')}
-    return { phraseLevelIndexForMastery, phraseTopDifficulty };
-`)();
+// The helpers are pure and dependency-free, so they run in an empty vm
+// context; their top-level declarations land on the sandbox.
+const sandbox = {};
+vm.runInNewContext([
+    extractFunction(src, 'phraseLevelTiers'),
+    extractFunction(src, 'phraseLevelIndexForMastery'),
+    extractFunction(src, 'phraseTopDifficulty'),
+].join('\n'), sandbox);
+const { phraseLevelIndexForMastery, phraseTopDifficulty } = sandbox;
 
 const levels = (...diffs) => diffs.map((difficulty) => ({ difficulty }));
 const pick = (lv, max, m) => phraseLevelIndexForMastery(lv, max, m);
