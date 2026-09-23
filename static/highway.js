@@ -69,6 +69,53 @@ import {
     strumGroupBuckets,
 } from './js/highway-draw.js';
 
+// Pick which of a phrase's levels to play at a master-difficulty fraction.
+//
+// A phrase's `max_difficulty` defines its tier scale (max_difficulty + 1
+// equal slider bands); each level's `difficulty` is the tier where its content
+// starts. The slider picks a tier and the phrase plays the LAST level whose
+// `difficulty` is at or below it. A fully authored ladder (difficulty 0..n-1,
+// max_difficulty n-1) maps exactly as `floor(mastery * n)` always did. A
+// ladder whose duplicate tiers were collapsed keeps sparse numbers (e.g. 0, 1,
+// 3), so each remaining level still covers the slider band its content was
+// authored for instead of being stretched over the whole slider. Generated
+// ladders (difficulty_ladder) rely on this to give every phrase one shared,
+// song-wide scale.
+//
+// Levels whose `difficulty` numbers are missing or not strictly increasing
+// fall back to positional indexing — the pre-tier behavior.
+function phraseLevelTiers(levels) {
+    const tiers = [];
+    for (let i = 0; i < levels.length; i++) {
+        const d = levels[i] && levels[i].difficulty;
+        if (!Number.isInteger(d) || d < 0 || (i > 0 && d <= tiers[i - 1])) return null;
+        tiers.push(d);
+    }
+    return tiers;
+}
+
+function phraseLevelIndexForMastery(levels, maxDifficulty, mastery) {
+    const n = levels.length;
+    if (n <= 1) return 0;
+    const tiers = phraseLevelTiers(levels);
+    if (tiers === null) return Math.min(n - 1, Math.floor(mastery * n));
+    const top = Math.max(tiers[n - 1], Number.isInteger(maxDifficulty) ? maxDifficulty : 0);
+    const tier = Math.min(top, Math.floor(mastery * (top + 1)));
+    let idx = 0;
+    while (idx + 1 < n && tiers[idx + 1] <= tier) idx++;
+    return idx;
+}
+
+// The tier from which a phrase plays its full content: the last level's
+// `difficulty`. Equals max_difficulty for a fully authored ladder; lower for a
+// phrase that stops changing before the top of its scale.
+function phraseTopDifficulty(levels) {
+    const n = levels.length;
+    if (n <= 1) return 0;
+    const tiers = phraseLevelTiers(levels);
+    return tiers === null ? n - 1 : tiers[n - 1];
+}
+
 function createHighway() {
   // R3c: per-instance mutable state in one object, so extracted renderer/ws
   // modules can close over it as a factory arg without cross-panel sharing.
@@ -1568,12 +1615,9 @@ function createHighway() {
         for (const p of hwState._phrases) {
             const n = p.levels.length;
             if (n === 0) continue;
-            // Map slider fraction to a level index. `n` already equals
-            // `max_difficulty + 1` for fully-authored phrases, and
-            // equals the authored-level count otherwise — so indexing
-            // into p.levels.length is both correct and defensive.
-            const idx = Math.min(n - 1, Math.floor(hwState._mastery * n));
-            const lv = p.levels[idx];
+            // Map slider fraction to a level via the phrase's tier scale
+            // (see phraseLevelIndexForMastery).
+            const lv = p.levels[phraseLevelIndexForMastery(p.levels, p.max_difficulty, hwState._mastery)];
             for (const x of lv.notes)   outNotes.push(x);
             for (const x of lv.chords)  outChords.push(x);
             // Anchors drive the fret zoom / pan. Keeping max-mastery
@@ -2722,7 +2766,11 @@ function createHighway() {
         // plugins (e.g. stream_kit vocals) can render karaoke without a second
         // WS connection — mirrors getBeats()/getSections().
         getLyrics() { return hwState.lyrics; },
-        // Phrase timing windows for plugins — `[{ index, start_time, end_time, max_difficulty }]`.
+        // Phrase timing windows for plugins —
+        // `[{ index, start_time, end_time, max_difficulty, top_difficulty }]`.
+        // `top_difficulty` is the tier from which the phrase plays in full
+        // (see phraseTopDifficulty) — equal to max_difficulty unless the
+        // phrase stops changing below the top of its tier scale.
         // Returns null when the current song has no phrase data (GP imports, single-difficulty
         // charts). Gate phrase-aware logic with hasPhraseData() first. Read-only; do not mutate.
         getPhrases() {
@@ -2732,6 +2780,7 @@ function createHighway() {
                 start_time: p.start_time,
                 end_time: p.end_time,
                 max_difficulty: p.max_difficulty,
+                top_difficulty: phraseTopDifficulty(p.levels || []),
             }));
         },
         getSongInfo() { return hwState.songInfo; },
