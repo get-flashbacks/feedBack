@@ -236,3 +236,57 @@ test('noteKey quantises time to ms so float drift cannot double-count', () => {
     assert.notEqual(noteKey(1.002, 60), noteKey(1.0001, 60));
     assert.notEqual(noteKey(1.0, 60), noteKey(1.0, 61));
 });
+
+test('classifySeek: rewinds and impossible forward jumps are seeks; playback and stalls are not', () => {
+    const { classifySeek } = load();
+    // Normal 60 fps playback, and small backward jitter.
+    assert.equal(classifySeek(10.0, 10.016, 0.016), null);
+    assert.equal(classifySeek(10.0, 9.95, 0.016), null);
+    // Paused: song clock frozen while the wall clock runs.
+    assert.equal(classifySeek(10.0, 10.0, 5), null);
+    // Loop wrap / ← seek.
+    assert.equal(classifySeek(10.0, 4.0, 0.016), 'back');
+    // → seek / scrub: song time jumped far beyond what one frame explains.
+    assert.equal(classifySeek(10.0, 40.0, 0.016), 'forward');
+    // A long render stall / backgrounded tab advances both clocks together —
+    // NOT a seek (the elapsed notes must still be swept as misses), and 2x
+    // playback through that stall isn't one either.
+    assert.equal(classifySeek(10.0, 13.5, 3.5), null);
+    assert.equal(classifySeek(10.0, 17.0, 3.5), null);
+    // Non-finite inputs never classify.
+    assert.equal(classifySeek(NaN, 1, 0.016), null);
+    assert.equal(classifySeek(1, NaN, 0.016), null);
+});
+
+test('loop wrap: forgetting judgments from the rewind point lets a passage be hit again', () => {
+    const { judgeHit, noteKey, forgetJudgmentsFrom, sweepMissed, sweepStartIndex } = load();
+    const notes = [
+        { midi: 60, t: 1.0 },
+        { midi: 62, t: 2.0 },
+        { midi: 64, t: 3.0 },
+    ];
+    const hitKeys = new Set([noteKey(1.0, 60), noteKey(2.0, 62)]);
+    const missedKeys = new Set([noteKey(3.0, 64)]);
+    // Before the fix a replayed note matched nothing (already hit) and
+    // scored as a wrong-note miss.
+    assert.equal(judgeHit(notes, 60, 1.0, hitKeys, TOL), null);
+    // Rewind to t=1.5: only judgments at/after the rewind point are dropped.
+    assert.equal(forgetJudgmentsFrom(hitKeys, 1.5 - TOL - 0.05), 1);
+    assert.equal(forgetJudgmentsFrom(missedKeys, 1.5 - TOL - 0.05), 1);
+    assert.ok(hitKeys.has(noteKey(1.0, 60)), 'a note before the rewind point keeps its hit');
+    assert.equal(judgeHit(notes, 62, 2.0, hitKeys, TOL), noteKey(2.0, 62));
+    // …and an unplayed pass is swept as missed again from the re-anchored cursor.
+    const cursor = { idx: sweepStartIndex(notes, 1.5, TOL) };
+    const n = sweepMissed(notes, 3.5, new Set(), missedKeys, TOL, 1.5, null, cursor);
+    assert.equal(n, 2);
+});
+
+test('forward seek: re-anchoring the sweep does not dump skipped notes in as misses', () => {
+    const { sweepMissed, sweepStartIndex } = load();
+    const notes = Array.from({ length: 100 }, (_, i) => ({ midi: 60, t: 5 + i * 0.5 }));
+    // Unanchored (the old behaviour): every skipped note counts.
+    assert.equal(sweepMissed(notes, 60, new Set(), new Set(), TOL, null, null, { idx: 0 }), 100);
+    // Anchored at the seek target, as _onSeek does.
+    const cursor = { idx: sweepStartIndex(notes, 30, TOL) };
+    assert.equal(sweepMissed(notes, 30.05, new Set(), new Set(), TOL, 30, null, cursor), 0);
+});

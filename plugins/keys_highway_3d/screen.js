@@ -737,6 +737,44 @@
         return lo;
     }
 
+    // Classify the song-time step between two frames as a user seek or as
+    // ordinary playback. Backward: any rewind past a small jitter band (a
+    // loop wrap, Section Practice, ← key). Forward: the song clock advanced
+    // far more than the wall clock could explain at any sane playback rate —
+    // a render stall or backgrounded tab advances both clocks together and
+    // is NOT a seek (the miss sweep must still count notes elapsed during a
+    // stall). Returns 'back' | 'forward' | null. Pure.
+    // Known limitation: this only sees the per-frame delta, so a slow
+    // continuous scrub can hide inside the thresholds below — a backward
+    // drag under SEEK_BACK_EPS_S/frame, or a paused forward scrub under
+    // SEEK_FWD_SLACK_S, isn't classified as a seek. The reported repros
+    // (←/→, Section Practice wrap, loop) are all well outside these bands.
+    // A real fix would hook the transport's own seek signal directly rather
+    // than inferring one from consecutive frames.
+    const SEEK_BACK_EPS_S = 0.1;
+    const SEEK_FWD_SLACK_S = 0.5;
+    const SEEK_MAX_RATE = 2;
+    function classifySeek(prevT, now, wallDtSec) {
+        if (!Number.isFinite(prevT) || !Number.isFinite(now)) return null;
+        const d = now - prevT;
+        if (d < -SEEK_BACK_EPS_S) return 'back';
+        const wall = Number.isFinite(wallDtSec) && wallDtSec > 0 ? wallDtSec : 0;
+        if (d > wall * SEEK_MAX_RATE + SEEK_FWD_SLACK_S) return 'forward';
+        return null;
+    }
+
+    // Drop hit/missed judgments for chart notes at or after `fromT` so a
+    // rewound passage can be played (and missed) again. Keys are
+    // noteKey()-shaped ("<t>|<midi>"), so the note time is the prefix.
+    function forgetJudgmentsFrom(keySet, fromT) {
+        if (!keySet || !Number.isFinite(fromT)) return 0;
+        let n = 0;
+        for (const key of Array.from(keySet)) {
+            if (parseFloat(key) >= fromT) { keySet.delete(key); n++; }
+        }
+        return n;
+    }
+
     /* ======================================================================
      *  Notation fetch — private per-instance WS (Staff View pattern)
      * ====================================================================== */
@@ -818,7 +856,15 @@
                 clearTimeout(timer);
                 reject(new Error('notation stream socket error'));
             };
-            ws.onclose = () => { if (info) finish(); };
+            ws.onclose = () => {
+                if (info) { finish(); return; }
+                // Closed before any notation arrived (server dropped the
+                // stream) — fail now instead of idling to the 20s timeout.
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
+                reject(new Error('notation stream closed before notation_info'));
+            };
         });
     }
 
@@ -1313,9 +1359,10 @@
         scoreFx: true,    // 2D overlay: +N pops, combo rings, streak-break wash
         bgIntensity: 0.5, // background-ambience density/strength
         bgReactive: true, // background reacts to the audio analyser
-        // Highway-layout options (apply on the next chart build via init()'s
-        // fx re-read). The sharp LAYOUT is a separate string setting
-        // (keys3d_bg_sharpMode); these two are the booleans.
+        // Highway-layout options. octaveGaps rebuilds the lanes + notes live
+        // (_rebuildChartGeometry); the two sliders apply on the next chart
+        // build. The sharp LAYOUT is a separate string setting
+        // (keys3d_bg_sharpMode).
         octaveGaps: true,      // ON: wider divider gap at each B→C octave boundary
         laneOpacity: 0.0,      // 0–1: lane-color strength. 0 (default) = dark floor +
         //                        block guide lines (E→F, B→C); 1 = full colored lanes; crossfades.
@@ -1544,8 +1591,8 @@
     // lanes; 'flat' = every note on one plane with piano-shaped tiled lanes
     // (sharps leaned to even the naturals); 'realistic'
     // = one plane with note bars sized like the physical keys (full naturals,
-    // full sharps overlapping on top). Geometry-time — applied on the next chart
-    // build via init()'s re-read.
+    // full sharps overlapping on top). Geometry-time — a live change rebuilds
+    // the lanes + notes together (_rebuildChartGeometry).
     const FX_LS_SHARPMODE = 'keys3d_bg_sharpMode';
     const SHARP_MODES = ['floating', 'flat', 'realistic'];
     function readSharpModeSetting() {
@@ -1793,13 +1840,19 @@
         return { outcome: 'handled', payload: {} };
     }
 
+    // The legacy-source purge only has to run once per page: nothing
+    // registers these sources anymore, so repeating it on every device-list
+    // change just fired 32 capability commands per connect / hotplug.
+    let _aiLegacyPurged = false;
     function _aiRefreshSources() {
+        if (_aiLegacyPurged) return;
         // MIDI is no longer surfaced into the audio-input domain — keys MIDI now
         // lives in the dedicated midi-input domain. Exporting pseudonymized
         // 'midi-input-N' sources here polluted audio-input device pickers (e.g.
         // the onboarding guitar input dropdown) with non-audio entries. Drop any
         // left over from an older build, and register none going forward.
-        if (!_capsApi()) return;
+        if (!_capsApi()) return;   // host not up yet — retry on the next call
+        _aiLegacyPurged = true;
         // Iterate a fixed bound over the KNOWN sourceId pattern, not a module-local
         // counter: after an in-page upgrade _aiRegisteredCount is reset to 0, so a
         // count-based loop would skip the prior build's leftovers entirely. The
@@ -1874,7 +1927,13 @@
         // after a chart loads. feedBack#67.
         let _lastMasteryApplied = null;
         let _loadSeq = 0;
-        let _songHandler = null;
+        // Chart last requested (filename + arrangement index) — draw()
+        // compares it against this panel's own songInfo to pick up song and
+        // arrangement switches (and a split panel's own arrangement).
+        let _chartFile = null, _chartArr = null;
+        // Bumped by every init()/destroy(): a deferred loadThree() callback
+        // from a superseded init() must not build a second renderer.
+        let _initGen = 0;
         // Per-chart geometry/material caches. One bevelled geometry per
         // (width, length-bucket) and one material per (pitch class, hand)
         // keeps per-note cost down to a mesh; rebuilt per chart, disposed on
@@ -1959,6 +2018,7 @@
         const _missedNoteKeys = new Set(); // …and swept-missed ones
         const _sweepCursor = { idx: 0 };   // monotonic miss-sweep position
         let _latestTime = 0;               // song time from the last draw bundle
+        let _lastSceneWallMs = 0;          // wall clock of the last updateScene (seek detection)
         let _missFloor = null;             // no retroactive misses before this t
         const _rawToPlayed = new Map();    // raw midi → transposed midi (held)
         const _heldNotes = new Set();      // transposed midis currently down
@@ -3280,6 +3340,17 @@
             }
         }
 
+        // Lanes (buildKeyboardAndHighway) and note bars (buildNoteMeshes) must
+        // be built from the SAME sharp layout + octave-gap setting. Rebuilding
+        // only the notes (as a mastery / hand-filter change does) after one of
+        // those settings changed would leave the bars sitting off their lanes,
+        // so a layout change rebuilds both, live.
+        function _rebuildChartGeometry() {
+            if (!_notation || !keyboardGroup || !notesGroup) return;
+            buildKeyboardAndHighway();
+            buildNoteMeshes();
+        }
+
         // Floating bar numbers: one camera-facing sprite per measure marker,
         // parked on the left shoulder of the highway and scrolled with the
         // notes in draw().
@@ -3375,7 +3446,7 @@
                 _hits++;
                 _streak++;
                 if (_streak > _bestStreak) _bestStreak = _streak;
-                _keyFlash.delete(playedMidi); // a hit cancels a lingering red
+                _cancelKeyFlash(playedMidi); // a hit cancels a lingering red
                 _spawnFlame(playedMidi, wall);
                 // Timing verdict: noteKey() serializes the matched note's t
                 // as its prefix ("<t.toFixed(3)>|<midi>"), so parseFloat
@@ -3402,13 +3473,30 @@
             }
         }
 
+        // End a wrong-note red flash early. The flash overwrites the key's
+        // emissive COLOR, and updateScene's approach-glow only drives the
+        // intensity — so just dropping the _keyFlash entry would leave the
+        // key glowing red for every later approaching note.
+        function _cancelKeyFlash(midi) {
+            if (!_keyFlash.has(midi)) return;
+            _keyFlash.delete(midi);
+            const mesh = keyMeshes.get(midi);
+            if (mesh) {
+                mesh.material.emissive.setHex(mesh.userData.origEmissive);
+                mesh.material.emissiveIntensity = mesh.userData.origEmissiveIntensity;
+            }
+        }
+        function _cancelAllKeyFlashes() {
+            for (const midi of Array.from(_keyFlash.keys())) _cancelKeyFlash(midi);
+        }
+
         function _resetScoring() {
             _hits = 0; _misses = 0; _streak = 0; _bestStreak = 0;
             _hitNoteKeys.clear();
             _missedNoteKeys.clear();
             _sweepCursor.idx = 0;
             _missFloor = null;
-            _keyFlash.clear();
+            _cancelAllKeyFlashes();
             // Fresh chart, fresh timing cursor — a note-on landing between
             // the new chart build and its first draw() must be judged at
             // the new run's start, not against the previous song's time.
@@ -3435,6 +3523,23 @@
             } else {
                 _missFloor = null;
             }
+        }
+
+        // A seek (loop wrap, Section Practice, ←/→, scrubbing) breaks the
+        // miss sweep's monotonic-time assumption. Backward: forget the
+        // judgments from the rewind point on, so a looped passage can be hit
+        // (and missed) again instead of every replayed note scoring as a
+        // wrong note against its stale "already hit" key. Both directions:
+        // re-anchor the sweep at the new position, so a forward jump doesn't
+        // dump every skipped note in as a miss. Run totals stay cumulative —
+        // each loop pass counts toward the run.
+        function _onSeek(kind, now) {
+            if (kind === 'back') {
+                const from = now - HIT_TOLERANCE_S - 0.05;
+                forgetJudgmentsFrom(_hitNoteKeys, from);
+                forgetJudgmentsFrom(_missedNoteKeys, from);
+            }
+            _anchorMissSweep(now);
         }
 
         // Swept-miss callback — kept as a named function so the per-frame
@@ -3700,6 +3805,14 @@
             // may still be pending (slow / permission prompt), during which no
             // events can arrive — sweeping then would bank false misses. _midiHandle
             // is truthy only after a handle is opened and wired.
+            {
+                const wallMs = performance.now();
+                if (_lastSceneWallMs > 0 && _notation) {
+                    const seek = classifySeek(_latestTime, now, (wallMs - _lastSceneWallMs) / 1000);
+                    if (seek) _onSeek(seek, now);
+                }
+                _lastSceneWallMs = wallMs;
+            }
             if (_midiHandle && _notation && _activeInstance === instance) {
                 if (_midiJustConnected) {
                     _missFloor = now;
@@ -3714,12 +3827,41 @@
             _latestTime = now;
         }
 
-        async function loadNotationForCurrentSong() {
+        // Which chart THIS highway is showing. The filename is the player's
+        // current song (split panels all play the same song), but the
+        // arrangement comes from this highway's own song_info — under
+        // splitscreen each panel picks its own arrangement, and the global
+        // currentSong only knows the main player's. `requireOwn` skips the
+        // global fallback so init() can wait for this panel's song_info
+        // instead of fetching a chart it would immediately replace.
+        // Returns null when unresolvable; when `onlyIfChanged`, also null
+        // when it matches the chart last requested (so the per-frame check
+        // in draw() allocates nothing in the steady state).
+        function _chartRef(bundle, requireOwn, onlyIfChanged) {
             const song = window.slopsmith && window.slopsmith.currentSong;
-            if (!song || !song.filename) return;
+            if (!song || !song.filename) return null;
+            const info = bundle && bundle.songInfo;
+            let arr;
+            if (info && Number.isInteger(info.arrangement_index)) arr = info.arrangement_index;
+            else if (requireOwn) return null;
+            else {
+                // Finite-or -1: a NaN here would never equal _chartArr and
+                // re-trigger the load every frame.
+                arr = song.arrangementIndex != null ? Number(song.arrangementIndex) : -1;
+                if (!Number.isFinite(arr)) arr = -1;
+            }
+            if (onlyIfChanged && song.filename === _chartFile && arr === _chartArr) return null;
+            return { filename: song.filename, arrangementIndex: arr };
+        }
+
+        async function loadNotationForCurrentSong(ref) {
+            if (!ref) return;
+            _chartFile = ref.filename;
+            _chartArr = ref.arrangementIndex;
+            const song = ref;
             const seq = ++_loadSeq;
             try {
-                const { measures, phrases } = await fetchNotation(song.filename, song.arrangementIndex != null ? song.arrangementIndex : -1);
+                const { measures, phrases } = await fetchNotation(song.filename, song.arrangementIndex);
                 if (seq !== _loadSeq || !_isReady) return; // superseded / torn down
                 const notes = flattenNotation(measures);
                 const playable = filterNotationByHand(notes, _handFilter);
@@ -3772,7 +3914,7 @@
                 _recordedThisRun = false;
                 _runMeta = {
                     filename: song.filename,
-                    arrangement: Number.isFinite(Number(song.arrangementIndex)) ? Number(song.arrangementIndex) : 0,
+                    arrangement: song.arrangementIndex >= 0 ? song.arrangementIndex : 0,
                 };
                 _ndOpenBindingForChart(_notation.range, seq);
                 _emitDomain('renderer-ready', { providerId: 'keys_highway_3d' });
@@ -4044,11 +4186,10 @@
             ambLight = dirLight = _floorMat = null;
             const sm = window.slopsmith;
             if (sm && typeof sm.off === 'function') {
-                if (_songHandler) sm.off('song:loaded', _songHandler);
                 if (_endHandler) sm.off('song:ended', _endHandler);
                 if (_stopHandler) sm.off('song:stop', _stopHandler);
             }
-            _songHandler = _endHandler = _stopHandler = null;
+            _endHandler = _stopHandler = null;
             if (_ndBindingId) {
                 _capCommand('note-detection', 'close-binding', { bindingId: _ndBindingId },
                     'Renderer torn down');
@@ -4083,6 +4224,8 @@
             _releaseAllHeld();
             _notation = null;
             _lastMasteryApplied = null;
+            _chartFile = _chartArr = null;
+            _lastSceneWallMs = 0;
             _isReady = false;
         }
 
@@ -4091,6 +4234,7 @@
 
             init(canvas, _bundle) {
                 if (_isReady) teardown();
+                const myInit = ++_initGen;
                 highwayCanvas = canvas;
                 fx = readFxSettings();
                 // Persisted string settings refresh here too — a palette,
@@ -4104,7 +4248,11 @@
                 _theme = readThemeSetting();
                 _bgStyle = readBgStyleSetting();
                 loadThree().then(() => {
-                    if (!highwayCanvas) return; // destroyed before load resolved
+                    // Destroyed before load resolved, or superseded by a newer
+                    // init() (stop → init before this callback ran): the newer
+                    // callback owns the canvas — building here too would put a
+                    // second WebGLRenderer on it and leak this pass's listeners.
+                    if (!highwayCanvas || myInit !== _initGen) return;
                     try {
                         ren = new T.WebGLRenderer({ canvas: highwayCanvas, antialias: true, alpha: false });
                         ren.setClearColor(FOG_COLOR, 1);
@@ -4128,6 +4276,7 @@
                         if ('vibrancy' in d.fx) _applyVibrancy();
                         if ('cinematic' in d.fx) _applyCinematic();
                         if ('bgIntensity' in d.fx) _bgMountStyle();
+                        if ('octaveGaps' in d.fx) _rebuildChartGeometry();
                         if ('glow' in d.fx) {
                             // Material emissive bases are also per-frame
                             // (updateScene) — only the cached/cloned rest
@@ -4150,9 +4299,10 @@
                             _palette = d.palette;
                             _applyPalette();
                         }
-                        if (d && d.sharpMode && SHARP_MODES.indexOf(d.sharpMode) !== -1) {
-                            // Geometry-time — takes effect on the next chart build.
+                        if (d && d.sharpMode && SHARP_MODES.indexOf(d.sharpMode) !== -1
+                                && d.sharpMode !== _sharpMode) {
                             _sharpMode = d.sharpMode;
+                            _rebuildChartGeometry();
                         }
                         if (d && HAND_FILTERS.indexOf(d.handFilter) !== -1) {
                             _handFilter = d.handFilter;
@@ -4182,10 +4332,14 @@
                     window.addEventListener('keys3d:settings', _fxHandler);
                     _injectHud();
                     _isReady = true;
-                    loadNotationForCurrentSong();
+                    // Load now only if this highway already knows its own
+                    // arrangement; otherwise draw() loads it once song_info
+                    // lands (it re-checks the chart every frame anyway, which
+                    // also covers song and arrangement switches — so no
+                    // global song:loaded listener, which only ever knew the
+                    // main player's arrangement).
+                    loadNotationForCurrentSong(_chartRef(_bundle, true, false));
                     if (window.slopsmith && typeof window.slopsmith.on === 'function') {
-                        _songHandler = () => loadNotationForCurrentSong();
-                        window.slopsmith.on('song:loaded', _songHandler);
                         // End-of-run stats: finalize on natural end AND on
                         // an early stop (player closed the song) — the
                         // once-per-run latch makes the pair idempotent.
@@ -4255,6 +4409,14 @@
                     }
                 }
                 const now = (bundle && typeof bundle.currentTime === 'number') ? bundle.currentTime : 0;
+                {
+                    // Cheap per-frame chart check (a string compare): load
+                    // when this highway's song/arrangement differs from the
+                    // chart last requested. A failed load keeps its key, so
+                    // it isn't retried every frame.
+                    const ref = _chartRef(bundle, false, true);
+                    if (ref) loadNotationForCurrentSong(ref);
+                }
                 if (_notation) {
                     _maybeApplyMasteryFilter(bundle, now);
                     updateScene(now);
@@ -4307,6 +4469,7 @@
             },
 
             destroy() {
+                _initGen++;   // void any init() still waiting on loadThree()
                 _instances.delete(instance);
                 // If the focused instance is going away but others remain
                 // (splitscreen teardown of one panel), promote a survivor so
@@ -4400,6 +4563,8 @@
         matchesHiddenHandNote,
         sweepMissed,
         sweepStartIndex,
+        classifySeek,
+        forgetJudgmentsFrom,
         readHandFilterSetting,
         HAND_FILTERS,
         readFxSettings,
