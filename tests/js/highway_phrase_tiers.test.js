@@ -8,9 +8,6 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 
-// A literal specifier resolved by the module system (no runtime path
-// construction); highway.js itself is not loaded, only read.
-const highwayJs = require.resolve('../../static/highway.js');
 
 function extractFunction(src, name) {
     const start = src.indexOf(`function ${name}(`);
@@ -27,7 +24,10 @@ function extractFunction(src, name) {
     assert.fail(`${name} body is balanced`);
 }
 
-const src = fs.readFileSync(highwayJs, 'utf8');
+// require.resolve with a literal specifier, inline (as in keys_highway_3d's
+// instance_invariants test): the module system resolves the path, so there
+// is no runtime path construction. highway.js is only read, not loaded.
+const src = fs.readFileSync(require.resolve('../../static/highway.js'), 'utf8');
 // The helpers are pure and dependency-free, so they run in an empty vm
 // context; their top-level declarations land on the sandbox.
 const sandbox = {};
