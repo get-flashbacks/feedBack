@@ -659,101 +659,111 @@
             }
         }
 
-        submit.addEventListener('click', async () => {
-            errEl.classList.add('hidden');
-            if (editing) {
-                submit.disabled = true;
+        async function submitEdit() {
+            submit.disabled = true;
+            try {
+                _profile = await postProfile();
+                await finish();
+            } catch (e) { showErr(e.message || 'Could not save profile.'); submit.disabled = false; }
+        }
+
+        function submitStepOne() {
+            setStep(2);
+            setTimeout(() => { try { songDirEl && songDirEl.focus(); } catch (e) { /* noop */ } }, 50);
+        }
+
+        async function submitStepTwo() {
+            // Save the song directory + kick a library scan, then continue
+            // to the achievements opt-in. "Skip for now" leaves it unconfigured.
+            submit.disabled = true;
+            try {
+                await saveSongDir();
+                setStep(3);
+            } catch (e) { showErr(e.message || 'Could not set the song directory.'); refreshSubmit(); }
+        }
+
+        async function submitStepThree() {
+            // Persist the wall opt-in choice (default OFF) then continue to
+            // instrument paths. Best-effort — a failed write must not block
+            // onboarding; the user can still set it later in Settings.
+            submit.disabled = true;
+            try {
+                const optEl = overlay.querySelector('#v3-ob-optin');
+                const optedIn = !!(optEl && optEl.checked);
                 try {
-                    _profile = await postProfile();
-                    await finish();
-                } catch (e) { showErr(e.message || 'Could not save profile.'); submit.disabled = false; }
-                return;
-            }
-            if (step === 1) {
-                setStep(2);
-                setTimeout(() => { try { songDirEl && songDirEl.focus(); } catch (e) { /* noop */ } }, 50);
-                return;
-            }
-            if (step === 2) {
-                // Save the song directory + kick a library scan, then continue
-                // to the achievements opt-in. "Skip for now" leaves it unconfigured.
-                submit.disabled = true;
-                try {
-                    await saveSongDir();
-                    setStep(3);
-                } catch (e) { showErr(e.message || 'Could not set the song directory.'); refreshSubmit(); }
-                return;
-            }
-            if (step === 3) {
-                // Persist the wall opt-in choice (default OFF) then continue to
-                // instrument paths. Best-effort — a failed write must not block
-                // onboarding; the user can still set it later in Settings.
-                submit.disabled = true;
-                try {
-                    const optEl = overlay.querySelector('#v3-ob-optin');
-                    const optedIn = !!(optEl && optEl.checked);
-                    try {
-                        await fetch('/api/settings', {
-                            method: 'POST', headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ achievements_enabled: optedIn }),
-                        });
-                        try { localStorage.setItem('achievementsEnabled', optedIn ? '1' : '0'); } catch (_) { /* noop */ }
-                    } catch (e) { /* best-effort — settable later */ }
-                    setStep(4);
-                    loadPathTiles();
-                } finally { refreshSubmit(); }
-                return;
-            }
-            if (step === 4) {
-                // Create the profile (onboarded=1) BEFORE the calibration choice
-                // so closing the overlay at the challenge can never lose the profile.
-                submit.disabled = true;
-                try {
-                    _profile = await postProfile();
-                    if (selectedPaths.length) {
-                        // A failed path save must NOT advance — step 4's skip
-                        // requires ≥1 selected path (spec invariant) and would
-                        // otherwise leave a pathless rank-1 profile.
-                        const res = await fetch('/api/progression/paths', {
-                            method: 'POST', headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ add: selectedPaths }),
-                        });
-                        if (!res.ok) {
-                            let msg = 'Could not save your instrument paths — try again.';
-                            try { msg = (await res.json()).error || msg; } catch (e) { /* keep default */ }
-                            throw new Error(msg);
-                        }
+                    await fetch('/api/settings', {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ achievements_enabled: optedIn }),
+                    });
+                    try { localStorage.setItem('achievementsEnabled', optedIn ? '1' : '0'); } catch (_) { /* noop */ }
+                } catch (e) { /* best-effort — settable later */ }
+                setStep(4);
+                loadPathTiles();
+            } finally { refreshSubmit(); }
+        }
+
+        async function submitStepFour() {
+            // Create the profile (onboarded=1) BEFORE the calibration choice
+            // so closing the overlay at the challenge can never lose the profile.
+            submit.disabled = true;
+            try {
+                _profile = await postProfile();
+                if (selectedPaths.length) {
+                    // A failed path save must NOT advance — step 4's skip
+                    // requires ≥1 selected path (spec invariant) and would
+                    // otherwise leave a pathless rank-1 profile.
+                    const res = await fetch('/api/progression/paths', {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ add: selectedPaths }),
+                    });
+                    if (!res.ok) {
+                        let msg = 'Could not save your instrument paths — try again.';
+                        try { msg = (await res.json()).error || msg; } catch (e) { /* keep default */ }
+                        throw new Error(msg);
                     }
-                    // New step: input-device selection + calibration, between
-                    // path selection and the note-detect calibration challenge.
-                    await runInputSetup(selectedPaths);
-                    setStep(isDesktop ? 5 : 6);
-                } catch (e) { showErr(e.message || 'Could not save profile.'); refreshSubmit(); }
-                return;
-            }
-            if (step === 5) {
-                // Step 5 (desktop only) — persist the amp-sim opt-in (default OFF
-                // / own-rig). Best-effort: a failed write must not block onboarding;
-                // it's settable later from the desktop Audio settings.
-                submit.disabled = true;
+                }
+                // New step: input-device selection + calibration, between
+                // path selection and the note-detect calibration challenge.
+                await runInputSetup(selectedPaths);
+                setStep(isDesktop ? 5 : 6);
+            } catch (e) { showErr(e.message || 'Could not save profile.'); refreshSubmit(); }
+        }
+
+        async function submitStepFive() {
+            // Step 5 (desktop only) — persist the amp-sim opt-in (default OFF
+            // / own-rig). Best-effort: a failed write must not block onboarding;
+            // it's settable later from the desktop Audio settings.
+            submit.disabled = true;
+            try {
+                const ampEl = overlay.querySelector('#v3-ob-ampsims');
+                const useAmpSims = !!(ampEl && ampEl.checked);
                 try {
-                    const ampEl = overlay.querySelector('#v3-ob-ampsims');
-                    const useAmpSims = !!(ampEl && ampEl.checked);
-                    try {
-                        await fetch('/api/settings', {
-                            method: 'POST', headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ use_amp_sims: useAmpSims }),
-                        });
-                    } catch (e) { /* best-effort — settable later */ }
-                    setStep(6);
-                } finally { refreshSubmit(); }
-                return;
-            }
+                    await fetch('/api/settings', {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ use_amp_sims: useAmpSims }),
+                    });
+                } catch (e) { /* best-effort — settable later */ }
+                setStep(6);
+            } finally { refreshSubmit(); }
+        }
+
+        async function submitStepSix() {
             // Step 6 — "Play it now": leave calibration pending (it completes
             // through the normal scored-stats path) and launch the diagnostic.
             const target = diagnosticFilename;
             await finish({ launchingSong: !!target });
             if (target && typeof window.playSong === 'function') window.playSong(target);
+        }
+
+        submit.addEventListener('click', async () => {
+            errEl.classList.add('hidden');
+            if (editing) return submitEdit();
+            if (step === 1) return submitStepOne();
+            if (step === 2) return submitStepTwo();
+            if (step === 3) return submitStepThree();
+            if (step === 4) return submitStepFour();
+            if (step === 5) return submitStepFive();
+            return submitStepSix();
         });
 
         skipBtn.addEventListener('click', async () => {

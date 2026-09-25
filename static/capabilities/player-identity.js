@@ -4,7 +4,10 @@
     const fb = window.feedBack;
     const caps = fb && fb.capabilities;
     if (!caps || caps.version !== 1 || fb.playerContexts) return;
-    const session = window.crypto?.randomUUID?.() || `local-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    let sessionSeq = 0;
+    const session = typeof window.crypto?.randomUUID === 'function'
+        ? window.crypto.randomUUID()
+        : `local-${Date.now()}-${(++sessionSeq).toString(36)}`;
     const players = new Map();
     const fields = ['session_id', 'player_id', 'profile_id', 'profile_hash', 'song_id', 'arrangement_id', 'instrument', 'role', 'skill'];
     const text = value => value == null ? '' : String(value);
@@ -28,14 +31,16 @@
         try { return profileIdentity(window.v3Profile?.get()); }
         catch (_) { return profileIdentity(null); }
     }
-    function upsert(input, highway, source = 'core.player') {
-        if (!input || !text(input.player_id) || (input.session_id && input.session_id !== session)) return null;
-        const id = text(input.player_id);
-        const old = players.get(id);
-        if (old && old.source !== source) return null;
-        const inherited = Object.hasOwn(input, 'profile_id') || Object.hasOwn(input, 'profile_hash')
-            ? false : (old?.inherited ?? true);
-        const merged = { ...old?.context, ...input, ...(inherited ? currentProfile() : {}) };
+    function validRequest(input) {
+        return !!input && !!text(input.player_id) && (!input.session_id || input.session_id === session);
+    }
+    function wantsInheritedProfile(input) {
+        return Object.hasOwn(input, 'profile_id') || Object.hasOwn(input, 'profile_hash');
+    }
+    function inheritedProfile(input, old) {
+        return wantsInheritedProfile(input) ? false : (old ? old.inherited : true);
+    }
+    function buildContext(merged) {
         const context = { schema: 'difficulty_ladder.player_context.v1' };
         for (const field of fields) context[field] = text(merged[field]);
         context.session_id = session;
@@ -46,9 +51,22 @@
         }
         context.profile_ready = merged.profile_ready !== false && !!(context.profile_id || context.profile_hash);
         context.ready = context.profile_ready && !!context.song_id && !!context.arrangement_id && !!context.instrument;
+        return context;
+    }
+    function contextChanged(old, context, highway) {
+        return !old || old.highway !== highway || JSON.stringify(old.context) !== JSON.stringify(context);
+    }
+    function upsert(input, highway, source = 'core.player') {
+        if (!validRequest(input)) return null;
+        const id = text(input.player_id);
+        const old = players.get(id);
+        if (old && old.source !== source) return null;
+        const inherited = inheritedProfile(input, old);
+        const merged = { ...old?.context, ...input, ...(inherited ? currentProfile() : {}) };
+        const context = buildContext(merged);
         const entry = { context, inherited, source, highway: highway === undefined ? old?.highway : highway };
         players.set(id, entry);
-        if (!old || JSON.stringify(old.context) !== JSON.stringify(context) || old.highway !== entry.highway) {
+        if (contextChanged(old, context, entry.highway)) {
             announce(context.ready && !old?.context.ready ? 'ready' : 'changed', entry);
         }
         return snapshot(entry);

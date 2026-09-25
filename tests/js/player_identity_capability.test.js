@@ -1,12 +1,14 @@
 const fs = require('node:fs');
-const path = require('node:path');
 const vm = require('node:vm');
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createWindow, ROOT } = require('./capabilities_test_harness');
+const { createWindow } = require('./capabilities_test_harness');
 
-const CAPABILITIES = fs.readFileSync(path.join(ROOT, 'static', 'capabilities.js'), 'utf8');
-const SOURCE = fs.readFileSync(path.join(ROOT, 'static', 'capabilities', 'player-identity.js'), 'utf8');
+// The JS suite always runs from the repository root (package.json:test:js),
+// so keep these source fixtures literal rather than constructing paths from
+// external input.
+const CAPABILITIES = fs.readFileSync('static/capabilities.js', 'utf8');
+const SOURCE = fs.readFileSync('static/capabilities/player-identity.js', 'utf8');
 
 function load(beforePlayerIdentity) {
     const window = createWindow();
