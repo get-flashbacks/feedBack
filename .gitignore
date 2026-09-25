@@ -67,3 +67,7 @@ Thumbs.db
 plugins/support_creators
 /library
 /static/sloppak_cache
+
+
+#Ignore vscode AI rules
+.github\instructions\codacy.instructions.md
