@@ -4510,6 +4510,11 @@
                 _handOverride = HAND_FILTERS.indexOf(value) !== -1 ? value : null;
                 _setHandFilter(_handOverride || readHandFilterSetting());
             },
+            // Returns the EFFECTIVE value so a host can render its control.
+            // The contract has no "follow global" signal, so a host that
+            // restores from getSetting() and re-applies it pins an override
+            // equal to the current global; that instance then ignores later
+            // global Settings changes until the host clears it.
             getSetting(key) {
                 return key === 'handFilter' ? _handFilter : undefined;
             },
