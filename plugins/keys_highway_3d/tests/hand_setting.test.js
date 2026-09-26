@@ -1,10 +1,9 @@
 // Per-instance hand filter (feedBack#849 / splitscreen#66). applySetting and
 // getSetting don't touch WebGL, so the real factory runs headless here; the
 // init() and settings-event paths need three.js and are guarded at source level
-// like tests/instance_invariants.test.js.
+// against the factory's own source.
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
 
 const store = new Map();
 global.window = { addEventListener() {}, removeEventListener() {}, dispatchEvent() {} };
@@ -19,8 +18,10 @@ global.localStorage = {
 global.CustomEvent = class { constructor(type, opts) { this.type = type; this.detail = opts && opts.detail; } };
 require('../screen.js');
 const factory = window.feedBackViz_keys_highway_3d;
-const src = fs.readFileSync(require.resolve('../screen.js'), 'utf8');
-const manifest = JSON.parse(fs.readFileSync(require.resolve('../plugin.json'), 'utf8'));
+// init(), the settings-event handler and _setHandFilter all live inside
+// createFactory, so its own source is enough for the source-level guards.
+const src = factory.toString();
+const manifest = require('../plugin.json');
 
 test('handFilter is per renderer instance and falls back to the global setting', () => {
     store.clear();
