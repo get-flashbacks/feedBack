@@ -13,6 +13,7 @@ import xml.etree.ElementTree as ET
 import pytest
 
 import gp2rs_gpx
+import safe_xml
 from gp2rs_gpx import convert_file
 
 from gp2rs_gpx import (
@@ -402,7 +403,7 @@ def _tie_chain_args(num_tie_beats: int):
             tie_attrs = '<Tie destination="true"/>'
         elif tie_origin:
             tie_attrs = '<Tie origin="true"/>'
-        return ET.fromstring(
+        return safe_xml.safe_fromstring(
             '<Note>'
             '<Property name="String"><String>0</String></Property>'
             '<Property name="Fret"><Fret>0</Fret></Property>'
@@ -412,33 +413,33 @@ def _tie_chain_args(num_tie_beats: int):
 
     beat_ids = [str(i) for i in range(num_tie_beats + 1)]
     beats_dict = {
-        beat_ids[0]: ET.fromstring(
+        beat_ids[0]: safe_xml.safe_fromstring(
             '<Beat><Rhythm ref="rW"/><Lyrics><Line>la</Line></Lyrics><Notes>0</Notes></Beat>'
         ),
     }
     notes_dict = {'0': _note('0', tie_destination=False, tie_origin=True)}
     for i in range(1, num_tie_beats + 1):
-        beats_dict[beat_ids[i]] = ET.fromstring(
+        beats_dict[beat_ids[i]] = safe_xml.safe_fromstring(
             f'<Beat><Rhythm ref="rW"/><Notes>{i}</Notes></Beat>'
         )
         notes_dict[str(i)] = _note(str(i), tie_destination=True)
 
-    masterbar = ET.fromstring('<MasterBar><Time>4/4</Time><Bars>0</Bars></MasterBar>')
+    masterbar = safe_xml.safe_fromstring('<MasterBar><Time>4/4</Time><Bars>0</Bars></MasterBar>')
     return dict(
-        root=ET.fromstring('<GPIF/>'),  # no MasterTrack -> 120 BPM
+        root=safe_xml.safe_fromstring('<GPIF/>'),  # no MasterTrack -> 120 BPM
         track={'string_pitches': [60]},
         raw_idx=0,
         masterbars=[masterbar],
-        bars_by_id={'0': ET.fromstring('<Bar><Voices>0</Voices></Bar>')},
-        voices_dict={'0': ET.fromstring(f'<Voice><Beats>{" ".join(beat_ids)}</Beats></Voice>')},
+        bars_by_id={'0': safe_xml.safe_fromstring('<Bar><Voices>0</Voices></Bar>')},
+        voices_dict={'0': safe_xml.safe_fromstring(f'<Voice><Beats>{" ".join(beat_ids)}</Beats></Voice>')},
         beats_dict=beats_dict,
         notes_dict=notes_dict,
-        rhythms_dict={'rW': ET.fromstring('<Rhythm><NoteValue>Whole</NoteValue></Rhythm>')},
+        rhythms_dict={'rW': safe_xml.safe_fromstring('<Rhythm><NoteValue>Whole</NoteValue></Rhythm>')},
     )
 
 
 def _vocal_length(xml_str):
-    root = ET.fromstring(xml_str)
+    root = safe_xml.safe_fromstring(xml_str)
     vocal = root.find('vocal')
     assert vocal is not None, xml_str
     return float(vocal.get('length'))
