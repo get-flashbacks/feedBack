@@ -47,13 +47,30 @@ RUN cmake -S /tmp/vgmstream -B /tmp/vgmstream/build \
 # GitHub, not artifact identity; the SHA-256 ARGs do that, and the image
 # digest only identifies the already-built output.
 #
+# Retention window: this tag is a month-end build, so it is good for two
+# years — until 2028-07-31, after which BtbN may delete it. The pre-flight
+# check in build-proxmox-ct.sh (and the release still resolving during a
+# Docker build) will fail loudly at that point rather than building an image
+# whose ffmpeg is unfetchable.
+#
+# Why 7.1 specifically, and when to bump: 7.1 is a terminal (LTS) FFmpeg
+# series — it receives no new upstream fixes by design, so it is the correct
+# series to freeze a long-lived image on rather than a moving one. BtbN only
+# publishes each series while it is current, so the month-end tag is the
+# newest retained release that still carries 7.1 GPL linux assets; the
+# `ffmpeg-n7.1-latest-*` names on newer tags 404. Revisit this when a
+# maintained series is warranted (a security advisory, a feature the app
+# actually uses) — not on a schedule, and not to chase a newer tag.
+#
 # To bump: pick a month-end tag from
 #   https://github.com/BtbN/FFmpeg-Builds/releases
-# that still publishes the 7.1 GPL linux builds, then take the two
+# that still publishes the target GPL linux builds, then take the two
 # filenames and their hashes from that release's `checksums.sha256` asset
 # and update the five FFMPEG_* ARGs here *and* in stage 2 (which repeats
 # them for the labels) *and* the FFMPEG_* constants in
 # build-proxmox-ct.sh — it ships the same binary to the Proxmox CT.
+# tools/check_docker_pins.py (CI) enforces that those three places agree,
+# and will reject a name that has drifted back to a floating `-latest-`.
 # `ci / docker-pins` fails the build if the pins are missing or mutable.
 FROM alpine:3.20 AS ffmpeg-fetcher
 ARG TARGETARCH

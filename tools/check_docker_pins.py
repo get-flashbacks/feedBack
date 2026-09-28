@@ -12,22 +12,26 @@ identify the payload.
 
 So every download must be pinned to a retained immutable release AND
 verified against a committed SHA-256 during the build, with the same values
-recorded in the image labels and mirrored by the Proxmox CT builder. This
-gate makes those properties structural instead of a convention:
+recorded in the image labels. This gate makes those properties structural
+instead of a convention:
 
   1. immutable-ref   — the release is a concrete dated `autobuild-*` tag, not
-                       `latest` / `master-latest`, and the asset filenames
-                       carry a concrete FFmpeg revision, not `-latest-`.
+                       `latest` / `master-latest`, and each asset name carries
+                       the concrete FFmpeg commit it was built from, not a
+                       `-latest-` placeholder.
   2. hashed          — every architecture has a 64-hex SHA-256 pin.
-  3. verified        — the fetcher stage runs `sha256sum -c` against it, and
-                       hard-fails when the pin is empty. A build that cannot
-                       verify must not produce an image.
-  4. labelled        — the final stage records release, filenames and hashes
+  3. verified        — the fetcher stage runs `sha256sum -c` against it in
+                       real code (not a comment), does not swallow the
+                       result, and hard-fails when the pin is empty. A build
+                       that cannot verify must not produce an image.
+  4. labelled        — the *final* stage records release, filenames and hashes
                        in `org.feedBack.ffmpeg.*` labels, with values
                        identical to the fetcher's (labels that disagree with
                        what was verified are worse than no labels).
   5. mirrored        — build-proxmox-ct.sh ships the same binary, so its pins
-                       must not drift from the Dockerfile's.
+                       must not drift from the Dockerfile's. (Constants only:
+                       that script keeps its documented `SKIP_HASH_CHECK`
+                       escape hatch, which this gate does not police.)
 
 Dev/CI tooling only: never imported on the serve or Docker path (constitution
 Principle I — same category as scripts/build-tailwind.sh and
@@ -50,10 +54,15 @@ from pathlib import Path
 # years, the last 14 dailies, and lets `latest` float — so a month-end dated
 # tag is the only shape that is both immutable and retained.
 RELEASE_RE = re.compile(r"^autobuild-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}$")
-# BtbN names version-pinned assets after the FFmpeg commit they were built
-# from, e.g. ffmpeg-n7.1.5-12-g1fdbca85aa-linux64-gpl-7.1.tar.xz. A `-latest-`
-# segment in place of that revision is the floating name.
-ASSET_RE = re.compile(r"^ffmpeg-n\d+\.\d+.*-linux(64|arm64)-gpl-\d+\.\d+\.tar\.xz$")
+# BtbN names version-pinned assets after the FFmpeg revision they were built
+# from: ffmpeg-n<series>-linux{64,arm64}-gpl-<series>.tar.xz, where
+# `n7.1.5-12-g1fdbca85aa` is the FFmpeg version, commits-since-tag, and
+# short commit hash. Requiring that literal shape is what rejects the
+# floating `ffmpeg-n7.1-latest-…` name (and the unfrozen `nN-…` master
+# track, which carries no series at all).
+ASSET_RE = re.compile(
+    r"^ffmpeg-n\d+\.\d+\.\d+-\d+-g[0-9a-f]{6,}-linux(?:64|arm64)-gpl-\d+\.\d+\.tar\.xz$"
+)
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 ARCHES = ("AMD64", "ARM64")
@@ -65,14 +74,7 @@ ARG_NAMES = (
     "FFMPEG_SHA256_ARM64",
 )
 
-# The five ARGs are declared twice: in the ffmpeg-fetcher stage, where they
-# drive the download, and in the final stage, where they feed the labels.
-# ARG values do not cross stage boundaries, so both declarations must exist
-# and must agree.
-_FETCHER_STAGE = "AS ffmpeg-fetcher"
-_FINAL_STAGE = "FROM python:3.12-slim\n"
-_STAGE_MARKER = re.compile(r"^(FROM .*|ARG .*)$")
-
+FETCHER_MARKER = "AS ffmpeg-fetcher"
 LABEL_PREFIX = "org.feedBack.ffmpeg."
 
 
@@ -86,22 +88,32 @@ class Report:
         self.errors.append(f"{where}: {message}")
 
 
-def _split_stages(text: str) -> dict[str, list[str]]:
-    """Map each build stage to the instruction lines that belong to it."""
-    stages: dict[str, list[str]] = {}
-    current: str | None = None
+def _split_stages(text: str) -> list[tuple[str, list[str]]]:
+    """Return `(FROM line, instruction lines)` per build stage, in file order.
+
+    Kept as an ordered list rather than a dict: the final stage is the *last*
+    one, and merging every non-fetcher stage into a single bucket would let an
+    earlier stage satisfy a check that is about the final image.
+    """
+    stages: list[tuple[str, list[str]]] = []
     for line in text.splitlines():
         if line.startswith("FROM "):
-            name = _FETCHER_STAGE if _FETCHER_STAGE in line else None
-            if name is None:
-                # The final image is the last non-fetcher `FROM`; give it a
-                # stable key so the label checks can find it.
-                name = _FINAL_STAGE
-            current = name
-            stages.setdefault(current, [])
-        elif current is not None:
-            stages[current].append(line)
+            stages.append((line, []))
+        elif stages:
+            stages[-1][1].append(line)
     return stages
+
+
+def _stage(stages: list[tuple[str, list[str]]], marker: str) -> list[str] | None:
+    for from_line, lines in stages:
+        if marker in from_line:
+            return lines
+    return None
+
+
+def _code(lines: list[str]) -> list[str]:
+    """Drop whole-line Dockerfile comments so prose cannot satisfy a check."""
+    return [line for line in lines if not line.lstrip().startswith("#")]
 
 
 def _arg_defaults(lines: list[str]) -> dict[str, str]:
@@ -120,24 +132,27 @@ def _arg_defaults(lines: list[str]) -> dict[str, str]:
 
 
 def check_dockerfile(path: Path, report: Report) -> None:
-    text = path.read_text(encoding="utf-8")
-    stages = _split_stages(text)
+    stages = _split_stages(path.read_text(encoding="utf-8"))
+    fetcher_lines = _stage(stages, FETCHER_MARKER)
+    final_lines = stages[-1][1] if stages else None
 
-    if _FETCHER_STAGE not in stages:
-        report.fail("Dockerfile", f"no build stage matching `{_FETCHER_STAGE}`")
-        return
-    if _FINAL_STAGE not in stages:
-        report.fail("Dockerfile", "no final image stage (`FROM python:3.12-slim`)")
+    if fetcher_lines is None:
+        report.fail("Dockerfile", f"no build stage matching `{FETCHER_MARKER}`")
+    # The fetcher is a throwaway stage, so the image that ships must be a
+    # *later* one; if the fetcher is last there is nothing to carry labels.
+    if not stages or FETCHER_MARKER in stages[-1][0]:
+        report.fail("Dockerfile", "no final image stage after the ffmpeg fetcher")
+    if fetcher_lines is None or final_lines is None:
         return
 
-    fetcher = _arg_defaults(stages[_FETCHER_STAGE])
-    final = _arg_defaults(stages[_FINAL_STAGE])
+    fetcher = _arg_defaults(fetcher_lines)
+    final = _arg_defaults(final_lines)
 
     # (1) immutable-ref + (2) hashed, on the values that drive the download.
-    for name in ARG_NAMES:
-        if name not in fetcher:
-            report.fail("Dockerfile/ffmpeg-fetcher", f"`ARG {name}` is not declared")
-    if report.errors:
+    absent = [name for name in ARG_NAMES if name not in fetcher]
+    for name in absent:
+        report.fail("Dockerfile/ffmpeg-fetcher", f"`ARG {name}` is not declared")
+    if absent:
         return
 
     release = fetcher["FFMPEG_RELEASE"]
@@ -154,8 +169,9 @@ def check_dockerfile(path: Path, report: Report) -> None:
         if not ASSET_RE.match(asset):
             report.fail(
                 "Dockerfile/ffmpeg-fetcher",
-                f"FFMPEG_BUILD_{arch}={asset!r} is not a concrete `-g<commit>` "
-                "tarball name; a `-latest-` segment means the asset floats.",
+                f"FFMPEG_BUILD_{arch}={asset!r} is not a concrete "
+                "`-g<commit>` tarball name; a `-latest-` segment means the "
+                "asset floats.",
             )
         digest = fetcher[f"FFMPEG_SHA256_{arch}"]
         if not SHA256_RE.match(digest):
@@ -165,14 +181,21 @@ def check_dockerfile(path: Path, report: Report) -> None:
                 "SHA-256. Every download needs a non-empty expected checksum.",
             )
 
-    # (3) verified: the pin has to actually gate the build.
-    fetcher_run = "\n".join(stages[_FETCHER_STAGE])
-    if "sha256sum -c" not in fetcher_run:
+    # (3) verified: the pin has to actually gate the build, in real code.
+    fetcher_code = _code(fetcher_lines)
+    verifying = [l for l in fetcher_code if "sha256sum -c" in l]
+    if not verifying:
         report.fail(
             "Dockerfile/ffmpeg-fetcher",
             "the download is never verified — no `sha256sum -c` against the pinned hash",
         )
-    if not re.search(r'-z\s+"?\$\{?FFMPEG_SHA256', fetcher_run):
+    elif any("|| true" in l for l in verifying):
+        report.fail(
+            "Dockerfile/ffmpeg-fetcher",
+            "the `sha256sum -c` result is discarded (`|| true`); a failed check "
+            "must abort the build",
+        )
+    if not any(re.search(r'-z\s+"?\$\{?FFMPEG_SHA256', l) for l in fetcher_code):
         report.fail(
             "Dockerfile/ffmpeg-fetcher",
             "no empty-checksum guard. A build must fail outright when the expected "
@@ -196,14 +219,16 @@ def check_dockerfile(path: Path, report: Report) -> None:
 
     # Each LABEL key is paired with the build arg it interpolates, so a label
     # that hardcodes a value instead of referring to the verified pin is caught.
+    # `[ \t]*` rather than `\s*` so the anchor cannot jump a line boundary and
+    # pair a key with the value on the next line; `LABEL ` may precede the
+    # first key of a multi-line instruction.
+    final_text = "\n".join(final_lines)
     labels = {
         f"{LABEL_PREFIX}{m.group(1)}": m.group(2)
         for m in re.finditer(
-            # `[ \t]*` rather than `\s*` so the anchor cannot jump a line
-            # boundary and pair a key with the value on the next line;
-            # `LABEL ` may precede the first key of a multi-line instruction.
-            rf"^[ \t]*(?:LABEL[ \t]+)?{re.escape(LABEL_PREFIX)}([\w.]+)=[\"']?\$?\{{?([A-Z0-9_]+)\}}?[\"']?",
-            text,
+            rf"^[ \t]*(?:LABEL[ \t]+)?{re.escape(LABEL_PREFIX)}([\w.]+)"
+            rf"=[\"']?\$?\{{?([A-Z0-9_]+)\}}?[\"']?",
+            final_text,
             re.MULTILINE,
         )
     }
@@ -227,7 +252,8 @@ def check_proxmox_script(path: Path, dockerfile: Path, report: Report) -> None:
     text = path.read_text(encoding="utf-8")
     shell = dict(re.findall(r"^(FFMPEG_[A-Z0-9_]+)=\"?([^\"\s]+)\"?$", text, re.MULTILINE))
     stages = _split_stages(dockerfile.read_text(encoding="utf-8"))
-    expected = _arg_defaults(stages.get(_FETCHER_STAGE, []))
+    fetcher_lines = _stage(stages, FETCHER_MARKER) or []
+    expected = _arg_defaults(fetcher_lines)
 
     for name in ARG_NAMES:
         if name not in shell:
