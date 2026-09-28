@@ -1083,23 +1083,30 @@ class MetadataDB:
         silently dropping settled `matched`/`review`/`failed` rows back to
         `unscanned` (attempts reset) — breaking the "unchanged hash makes
         re-enrichment a no-op" idempotence contract. A SHA-1 digest is 40 hex
-        chars (SHA-256 is 64), so legacy rows are detected by length and
-        re-stamped IN PLACE from the song's current metadata — match_state,
-        attempts, backoff, and canonical fields are untouched. Idempotent (a
-        no-op once every row carries the current algorithm); orphan rows with no
-        matching `songs` row are left for the normal identity-change path if the
-        song ever returns."""
+        chars (SHA-256 is 64), so legacy rows are detected by length. Only rows
+        whose stored digest matches the current metadata's SHA-1 identity are
+        re-stamped IN PLACE; mismatches stay untouched for the normal identity-
+        change path. match_state, attempts, backoff, and canonical fields are
+        untouched. Orphan rows with no matching `songs` row are left alone."""
         with self._lock:
             rows = self.conn.execute(
-                "SELECT e.filename, s.artist, s.title, s.album, s.duration "
+                "SELECT e.filename, e.content_hash, s.artist, s.title, s.album, s.duration "
                 "FROM song_enrichment e JOIN songs s ON s.filename = e.filename "
                 "WHERE length(e.content_hash) = 40").fetchall()
             if not rows:
                 return
+            updates = []
+            for fn, stored_hash, artist, title, album, duration in rows:
+                legacy_hash = self._enrichment_content_hash(
+                    artist, title, album, duration, "sha1")
+                if stored_hash == legacy_hash:
+                    updates.append((self.enrichment_content_hash(
+                        artist, title, album, duration), fn))
+            if not updates:
+                return
             self.conn.executemany(
                 "UPDATE song_enrichment SET content_hash = ? WHERE filename = ?",
-                [(self.enrichment_content_hash(a, t, al, d), fn)
-                 for fn, a, t, al, d in rows])
+                updates)
             self.conn.commit()
 
     def is_favorite(self, filename: str) -> bool:
@@ -3161,6 +3168,10 @@ class MetadataDB:
         hash makes re-enrichment a no-op (idempotent). Whitespace/case-folded
         so trivial edits don't invalidate a match; duration is rounded to whole
         seconds for the same reason."""
+        return MetadataDB._enrichment_content_hash(artist, title, album, duration, "sha256")
+
+    @staticmethod
+    def _enrichment_content_hash(artist, title, album, duration, algorithm) -> str:
         def norm(s):
             return " ".join(str(s or "").lower().split())
         try:
@@ -3168,7 +3179,7 @@ class MetadataDB:
         except (TypeError, ValueError):
             dur = "0"
         raw = "|".join([norm(artist), norm(title), norm(album), dur])
-        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+        return hashlib.new(algorithm, raw.encode("utf-8")).hexdigest()
 
     def enrichment_pending(self, limit: int = 500,
                            allowed_keys: frozenset | None = None) -> list[dict]:
