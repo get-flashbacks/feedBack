@@ -1087,7 +1087,16 @@ class MetadataDB:
         whose stored digest matches the current metadata's SHA-1 identity are
         re-stamped IN PLACE; mismatches stay untouched for the normal identity-
         change path. match_state, attempts, backoff, and canonical fields are
-        untouched. Orphan rows with no matching `songs` row are left alone."""
+        untouched. Orphan rows with no matching `songs` row are left alone.
+
+        Load-bearing assumption: the legacy SHA-1 must have been computed with
+        the same `norm()` normalization (case-folded, whitespace-collapsed,
+        duration rounded to whole seconds) this class applies today. If a past
+        release normalized differently, this equality is false for every
+        legacy row, `updates` comes back empty, and the migration silently
+        no-ops — re-queueing the whole library exactly as described above,
+        with no trace in the logs. A future change to `norm()` must account
+        for this."""
         with self._lock:
             rows = self.conn.execute(
                 "SELECT e.filename, e.content_hash, s.artist, s.title, s.album, s.duration "
@@ -3181,9 +3190,10 @@ class MetadataDB:
         raw = "|".join([norm(artist), norm(title), norm(album), dur])
         # Identity/dedup key, not a security boundary — this may compute a
         # legacy SHA-1 digest purely to detect and re-stamp old rows during
-        # the sha1->sha256 migration (see the two call sites above).
-        # usedforsecurity=False tells hashlib (and SAST tools) that's the
-        # intended, non-cryptographic use.
+        # the sha1->sha256 migration (_migrate_enrichment_hash_sha256, line
+        # 1078, is the only caller that ever passes "sha1"). usedforsecurity
+        # =False tells hashlib (and SAST tools) that's the intended,
+        # non-cryptographic use.
         return hashlib.new(algorithm, raw.encode("utf-8"), usedforsecurity=False).hexdigest()
 
     def enrichment_pending(self, limit: int = 500,
