@@ -17,6 +17,8 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 _REPO = Path(__file__).resolve().parent.parent
 _GATE = _REPO / "tools" / "check_docker_pins.py"
 _spec = importlib.util.spec_from_file_location("check_docker_pins", _GATE)
@@ -50,21 +52,33 @@ def _dockerfile(
     comment: str = "",
     middle_stage: str = "",
     final_args: bool = True,
+    output_flag: str = "-o",
+    url: str = "${FFMPEG_RELEASE}/x",
+    verify_digest: str = "${FFMPEG_SHA256}",
+    guard_body: str = "exit 1",
+    extra: str = "",
+    heredoc: str = "",
 ) -> str:
     """Render a Dockerfile. Every knob defaults to the *passing* shape."""
     if verify:
-        # `swallow` is the text a maintainer would append to disable the check.
+        # `swallow` is the text a maintainer would append to disable the check;
+        # it replaces the `-` that names the checksum list on stdin.
         verify_block = (
-            f'    && echo "${{FFMPEG_SHA256}}  /tmp/ffmpeg.tar.xz" | sha256sum -c {swallow}\\\n'
+            f'    && echo "{verify_digest}  /tmp/ffmpeg.tar.xz" | sha256sum -c {swallow}\\\n'
             if swallow
-            else '    && echo "${FFMPEG_SHA256}  /tmp/ffmpeg.tar.xz" | sha256sum -c - \\\n'
+            else f'    && echo "{verify_digest}  /tmp/ffmpeg.tar.xz" | sha256sum -c - \\\n'
         )
     else:
         verify_block = ""
     guard_block = (
-        '    && if [ -z "$FFMPEG_SHA256" ]; then exit 1; fi \\\n' if empty_guard else ""
+        f'    && if [ -z "$FFMPEG_SHA256" ]; then {guard_body}; fi \\\n'
+        if empty_guard
+        else ""
     )
     comment_block = f"# {comment}\n" if comment else ""
+    # A heredoc is a real Docker instruction shape: its body is data that the
+    # shell never executes, so it must not count as a check or a label.
+    heredoc_block = f"{heredoc}\n" if heredoc else ""
     label_block = (
         'LABEL org.feedBack.ffmpeg.release="${FFMPEG_RELEASE}" \\\n'
         '      org.feedBack.ffmpeg.source.amd64="${FFMPEG_BUILD_AMD64}" \\\n'
@@ -89,9 +103,11 @@ def _dockerfile(
         "ARG TARGETARCH\n"
         f"{_args(release)}"
         f"{comment_block}"
+        f"{heredoc_block}"
         "RUN apk add --no-cache curl xz \\\n"
-        '    && curl -fsSL "${FFMPEG_RELEASE}/x" -o /tmp/ffmpeg.tar.xz \\\n'
+        f'    && curl -fsSL "{url}" {output_flag} /tmp/ffmpeg.tar.xz \\\n'
         f"{verify_block}{guard_block}"
+        f"{extra}"
         "    && tar -xJf /tmp/ffmpeg.tar.xz -C /out\n"
         "\n"
         f"{middle_stage}"
@@ -282,6 +298,28 @@ def test_a_later_reassignment_in_the_proxmox_script_is_rejected(tmp_path):
     assert [e for e in errors if "FFMPEG_RELEASE" in e], errors
 
 
+@pytest.mark.parametrize("prefix", ["    ", "\texport ", "  export\t", "readonly "])
+def test_indented_and_exported_proxmox_overrides_are_seen(tmp_path, prefix):
+    # The shell honours an indented or `export`ed assignment, so the gate
+    # must not report the pinned value as the effective one.
+    errors = _errors(
+        tmp_path,
+        _dockerfile(),
+        _proxmox() + f'{prefix}FFMPEG_RELEASE="latest"\n',
+    )
+    assert [e for e in errors if "FFMPEG_RELEASE" in e], (prefix, errors)
+
+
+def test_a_commented_out_proxmox_override_is_ignored(tmp_path):
+    # A comment changes nothing at runtime, so a commented-out assignment must
+    # not be taken for the effective pin. The gate drops comment lines outright
+    # rather than relying on the assignment regex to skip them.
+    errors = _errors(
+        tmp_path, _dockerfile(), _proxmox() + '# FFMPEG_RELEASE="latest"\n'
+    )
+    assert errors == []
+
+
 def test_a_swallowed_verification_result_is_rejected(tmp_path):
     errors = _synced(tmp_path, swallow="|| true \\")
     assert [e for e in errors if "discarded" in e], errors
@@ -290,9 +328,149 @@ def test_a_swallowed_verification_result_is_rejected(tmp_path):
 def test_every_failure_discarding_construct_is_rejected(tmp_path):
     # Docker folds `\` continuations into one command before running it, so a
     # `|| true` on the *next* physical line swallows the check just as surely.
-    for discard in ("|| true", "|| :", "|| exit 0", "set +e"):
+    for discard in ("- || true \\", "- || : \\", "- || exit 0 \\", "- || echo skipped \\"):
         errors = _synced(tmp_path, swallow=discard)
         assert [e for e in errors if "discarded" in e], (discard, errors)
+
+
+def test_set_errexit_off_is_rejected(tmp_path):
+    errors = _synced(tmp_path, extra='    && set +e \\\n')
+    assert [e for e in errors if "errexit" in e], errors
+
+
+def test_a_pipe_after_the_check_is_rejected(tmp_path):
+    # `sha256sum -c - | tee X` takes tee's exit status, not the check's.
+    errors = _synced(tmp_path, swallow="- | tee /dev/stderr")
+    assert [e for e in errors if "status is overwritten" in e], errors
+
+
+def test_backgrounding_the_check_is_rejected(tmp_path):
+    errors = _synced(tmp_path, swallow="- &")
+    assert [e for e in errors if "status is overwritten" in e], errors
+
+
+def test_inverting_the_check_is_rejected(tmp_path):
+    # `! … | sha256sum -c -` turns a mismatch into exit 0.
+    dockerfile = _dockerfile().replace(
+        '    && echo "${FFMPEG_SHA256}  /tmp/ffmpeg.tar.xz" | sha256sum -c - \\',
+        '    && ! echo "${FFMPEG_SHA256}  /tmp/ffmpeg.tar.xz" | sha256sum -c - \\',
+    )
+    errors = _errors(tmp_path, dockerfile, _proxmox())
+    assert [e for e in errors if "inverted" in e], errors
+
+
+def test_a_warn_only_check_is_rejected(tmp_path):
+    # `if ! …; then echo "mismatch"; fi` reports and continues.
+    dockerfile = _dockerfile().replace(
+        '    && echo "${FFMPEG_SHA256}  /tmp/ffmpeg.tar.xz" | sha256sum -c - \\',
+        '    && if ! echo "${FFMPEG_SHA256}  /tmp/ffmpeg.tar.xz" | sha256sum -c -; '
+        'then echo "checksum mismatch"; fi \\',
+    )
+    errors = _errors(tmp_path, dockerfile, _proxmox())
+    assert [e for e in errors if "inverted" in e], errors
+
+
+def test_a_hardcoded_digest_in_the_check_is_rejected(tmp_path):
+    # The label would still interpolate the ARG, so provenance would describe
+    # bytes that were never checked.
+    errors = _synced(tmp_path, verify_digest="0" * 64)
+    assert [e for e in errors if "other than the pin" in e], errors
+
+
+def test_a_url_that_ignores_the_pinned_release_is_rejected(tmp_path):
+    errors = _synced(tmp_path, url="master-latest/x")
+    assert [e for e in errors if "does not use" in e], errors
+
+
+def test_a_heredoc_cannot_supply_the_check(tmp_path):
+    # The heredoc body is data; the shell never runs it.
+    errors = _synced(
+        tmp_path,
+        verify=False,
+        heredoc="RUN <<'SHA'\nsha256sum -c /tmp/ffmpeg.tar.xz\nSHA",
+    )
+    assert [e for e in errors if "never verified" in e], errors
+
+
+def test_a_heredoc_cannot_supply_the_labels(tmp_path):
+    errors = _synced(
+        tmp_path,
+        labels=False,
+        heredoc=(
+            "RUN <<'LBL'\n"
+            'LABEL org.feedBack.ffmpeg.release="${FFMPEG_RELEASE}" \\\n'
+            '      org.feedBack.ffmpeg.source.amd64="${FFMPEG_BUILD_AMD64}" \\\n'
+            '      org.feedBack.ffmpeg.source.arm64="${FFMPEG_BUILD_ARM64}" \\\n'
+            '      org.feedBack.ffmpeg.sha256.amd64="${FFMPEG_SHA256_AMD64}" \\\n'
+            '      org.feedBack.ffmpeg.sha256.arm64="${FFMPEG_SHA256_ARM64}"\n'
+            "LBL"
+        ),
+    )
+    assert len([e for e in errors if "missing `LABEL" in e]) == 5, errors
+
+
+def test_a_guard_that_only_warns_is_rejected(tmp_path):
+    errors = _synced(tmp_path, guard_body='echo "WARNING: no pin"')
+    assert [e for e in errors if "fails the build" in e], errors
+
+
+def test_a_guard_that_reassigns_the_pin_is_rejected(tmp_path):
+    errors = _synced(tmp_path, guard_body="FFMPEG_SHA256=deadbeef")
+    assert [e for e in errors if "fails the build" in e], errors
+
+
+@pytest.mark.parametrize("flag", ["-o", "--output", "--output=", "-sfo", "-so"])
+def test_curl_output_flag_spellings_are_understood(tmp_path, flag):
+    # Failing to recognise the flag would silently skip the coverage check.
+    assert _synced(tmp_path, output_flag=flag) == []
+
+
+def test_an_output_flag_inside_a_url_is_not_mistaken_for_one(tmp_path):
+    # `-o` in a query string is part of the URL, not an output path. A naive
+    # `split()` would read this as a second download target.
+    errors = _synced(tmp_path, url='${FFMPEG_RELEASE}/x?a=1 -o /tmp/evil')
+    assert errors == []
+    assert gate._curl_outputs('curl -fsSL "u?a=1 -o /tmp/evil" -o /tmp/real') == {"/tmp/real"}
+
+
+def test_a_redirected_download_is_still_recognised(tmp_path):
+    # `curl … > /tmp/f.tar.xz` verifies just as well; failing to model it would
+    # only push a maintainer toward a form the gate cannot follow.
+    assert _synced(tmp_path, output_flag=">") == []
+
+
+def test_an_unidentifiable_download_fails_closed(tmp_path):
+    # No `-o`, no redirection: coverage is unknown, so it must not pass.
+    errors = _synced(tmp_path, output_flag="")
+    assert [e for e in errors if "cannot identify what curl writes" in e], errors
+
+
+def test_one_asset_named_for_both_architectures_is_rejected(tmp_path):
+    errors = _synced(tmp_path, arm64_tarball=AMD64_TARBALL)
+    assert [e for e in errors if "same asset" in e], errors
+
+
+@pytest.mark.parametrize("bad", ["autobuild-2026-13-45-99-99", "autobuild-2026-02-30-14-10"])
+def test_an_impossible_release_date_is_rejected(tmp_path, bad):
+    errors = _synced(tmp_path, release=bad)
+    assert [e for e in errors if "FFMPEG_RELEASE" in e], errors
+
+
+def test_a_command_after_the_check_is_rejected(tmp_path):
+    # `sha256sum -c - ; echo done` exits 0 no matter what the check said.
+    dockerfile = _dockerfile().replace(
+        '    && echo "${FFMPEG_SHA256}  /tmp/ffmpeg.tar.xz" | sha256sum -c - \\',
+        '    && echo "${FFMPEG_SHA256}  /tmp/ffmpeg.tar.xz" | sha256sum -c - ; echo done \\',
+    )
+    errors = _errors(tmp_path, dockerfile, _proxmox())
+    assert [e for e in errors if "overwrites its exit status" in e], errors
+
+
+def test_a_hash_inside_a_word_is_not_treated_as_a_comment(tmp_path):
+    # `${VAR#prefix}` and `a#b` are literal text; a strict `#` would truncate
+    # the command and reject a good Dockerfile.
+    errors = _synced(tmp_path, extra='    && echo ${FFMPEG_SHA256#none} a#b > /dev/null \\\n')
+    assert errors == []
 
 
 def test_an_inline_comment_cannot_hide_a_verification(tmp_path):
