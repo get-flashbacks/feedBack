@@ -70,6 +70,22 @@ def test_safe_parse_still_parses_normal_xml_from_a_file(tmp_path):
     assert root.tag == "song"
 
 
+def test_safe_parse_fails_closed_without_defusedxml(tmp_path, monkeypatch):
+    p = tmp_path / "song.xml"
+    p.write_text(NORMAL_XML, encoding="utf-8")
+    monkeypatch.setattr(safe_xml, "_HAVE_DEFUSEDXML", False)
+    monkeypatch.setattr(ET, "parse", lambda *_args, **_kwargs: pytest.fail("stdlib parser called"))
+    with pytest.raises(ET.ParseError, match="defusedxml is required"):
+        safe_xml.safe_parse(str(p))
+
+
+def test_safe_fromstring_fails_closed_without_defusedxml(monkeypatch):
+    monkeypatch.setattr(safe_xml, "_HAVE_DEFUSEDXML", False)
+    monkeypatch.setattr(ET, "fromstring", lambda *_args, **_kwargs: pytest.fail("stdlib parser called"))
+    with pytest.raises(ET.ParseError, match="defusedxml is required"):
+        safe_xml.safe_fromstring(NORMAL_XML)
+
+
 def test_safe_fromstring_raises_parseerror_on_genuinely_malformed_xml():
     # Ordinary malformed-XML behavior must be unchanged (still ET.ParseError,
     # not some other exception type) so existing `except ET.ParseError:`

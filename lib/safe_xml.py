@@ -29,15 +29,15 @@ except ImportError:
     _DefusedXmlException = ()
     _HAVE_DEFUSEDXML = False
     log.warning(
-        "safe_xml: defusedxml not installed; parsing untrusted XML with "
-        "stdlib xml.etree (install defusedxml for hardened parsing)"
+        "safe_xml: defusedxml not installed; refusing to parse untrusted XML "
+        "(install defusedxml for hardened parsing)"
     )
 
 
 def safe_parse(source):
     """Hardened equivalent of ``ET.parse(source)``."""
     if not _HAVE_DEFUSEDXML:
-        return ET.parse(source)
+        raise ET.ParseError("defusedxml is required to parse untrusted XML")
     try:
         return _safe_ET.parse(source)
     except _DefusedXmlException as e:
@@ -47,7 +47,7 @@ def safe_parse(source):
 def safe_fromstring(text):
     """Hardened equivalent of ``ET.fromstring(text)``."""
     if not _HAVE_DEFUSEDXML:
-        return ET.fromstring(text)
+        raise ET.ParseError("defusedxml is required to parse untrusted XML")
     try:
         return _safe_ET.fromstring(text)
     except _DefusedXmlException as e:
