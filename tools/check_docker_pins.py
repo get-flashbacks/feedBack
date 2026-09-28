@@ -15,18 +15,26 @@ verified against a committed SHA-256 during the build, with the same values
 recorded in the image labels. This gate makes those properties structural
 instead of a convention:
 
-  1. immutable-ref   — the release is a concrete dated `autobuild-*` tag, not
-                       `latest` / `master-latest`, and each asset name carries
-                       the concrete FFmpeg commit it was built from, not a
-                       `-latest-` placeholder.
+  1. immutable-ref   — the release is a concrete dated `autobuild-*` tag
+                       naming a real calendar date, not `latest` /
+                       `master-latest`, and each asset name carries the
+                       concrete FFmpeg commit it was built from, not a
+                       `-latest-` placeholder. Naming one asset for both
+                       architectures is rejected: one of them would download
+                       the wrong binary.
   2. hashed          — every architecture has a 64-hex SHA-256 pin.
   3. verified        — the fetcher stage runs `sha256sum -c` against the file
-                       it actually downloaded, in code the shell will execute
-                       (not a comment, on any continuation line), does not
-                       discard the result, and hard-fails when the pin is
-                       empty. A build that cannot verify must not produce an
-                       image. The checks reason about the *unfolded* command,
-                       because Docker joins `\` continuations before running.
+                       it actually downloaded, reading the selected pin rather
+                       than a hardcoded digest, and fed by a URL built from the
+                       pinned release. The check must be code the shell will
+                       execute (not a comment, not a `RUN` heredoc body, on any
+                       continuation line), and its result must decide the exit
+                       status — no `|| …`, no `;` or pipe or `&` after it, no
+                       `!` inversion, no `set +e`. It also hard-fails when the
+                       pin is empty, rather than warning or reassigning one. A
+                       build that cannot verify must not produce an image. The
+                       checks reason about the *unfolded* command, because
+                       Docker joins `\` continuations before running.
   4. labelled        — the *final* stage carries `org.feedBack.ffmpeg.*`
                        LABEL instructions recording release, filenames and
                        hashes, each interpolating the build arg that was
@@ -49,6 +57,7 @@ Exit status is 0 only when every layer passes.
 from __future__ import annotations
 
 import argparse
+import datetime
 import re
 import sys
 from pathlib import Path
@@ -91,17 +100,37 @@ REQUIRED_LABELS = (
     ("sha256.arm64", "FFMPEG_SHA256_ARM64"),
 )
 
-# Constructs that keep the pipeline running after a failed `sha256sum -c`.
-# Docker joins `\` continuations before executing, so `|| true` on the next
-# physical line still swallows the failure — hence these are matched against
-# the unfolded command.
-_FAILURE_DISCARDS = (
-    "|| true",
-    "|| :",
-    "|| exit 0",
-    "||:",
-    "set +e",
+_HEREDOC_RE = re.compile(r"<<(?P<dash>-)?(?P<quote>['\"]?)(?P<word>[A-Za-z_][A-Za-z0-9_]*)(?P=quote)")
+
+# The per-architecture variable the fetcher selects at build time. A check that
+# hardcodes a digest instead of reading this is verifying something else.
+SELECTED_SHA_VAR = r"\$\{?FFMPEG_SHA256(?![_A-Z0-9])\}?"
+RELEASE_VAR = r"\$\{?FFMPEG_RELEASE(?![_A-Z0-9])\}?"
+
+# A guard must *fail the build*, not mention the empty pin: `then echo "warn"`
+# and `then FFMPEG_SHA256=deadbeef` both pass a bare `-z` mention.
+_FAILURE_ACTIONS = re.compile(
+    r"\bexit\s+(?:[1-9]|\$\{?[A-Za-z_])"  # exit 1 / exit "$STATUS"
+    r"|\breturn\s+[1-9]"
+    r"|\bfalse\b"
+    r"|\|\|\s*(?:exit\s+[1-9]|false)"
 )
+
+# A `fi` that closes a block, not the `fi` inside a word like "unverified".
+_CLOSING_FI = re.compile(r"(?:^|[\s;&|(])fi(?:[\s;&|)]|$)")
+
+
+def _is_real_date(tag: str) -> bool:
+    """True if an `autobuild-<date>-<hh>-<mm>` tag names a real calendar date."""
+    m = re.match(r"^autobuild-(\d{4})-(\d{2})-(\d{2})-(\d{2})-(\d{2})$", tag)
+    if not m:
+        return False
+    year, month, day, hour, minute = (int(g) for g in m.groups())
+    try:
+        datetime.date(year, month, day)
+    except ValueError:
+        return False
+    return hour <= 23 and minute <= 59
 
 
 class Report:
@@ -148,15 +177,8 @@ def _stage(stages: list[tuple[str, list[str]]]) -> list[str] | None:
     return None
 
 
-def _logical(lines: list[str]) -> list[str]:
-    """Unfold backslash continuations and strip shell comments.
-
-    Docker joins a continued `RUN` into one shell command before executing it,
-    so a check that reads one physical line at a time can be satisfied by a
-    fragment that is really commented out or on a later continuation line.
-    Unfolding first, then removing `#` comments with quote awareness, means the
-    gate reasons about the command the shell actually runs.
-    """
+def _unfold(lines: list[str]) -> list[str]:
+    """Join backslash continuations, as Docker does before running a `RUN`."""
     joined: list[str] = []
     buf = ""
     for line in lines:
@@ -168,11 +190,41 @@ def _logical(lines: list[str]) -> list[str]:
             buf = ""
     if buf:
         joined.append(buf)
-    return [_strip_shell_comment(line) for line in joined]
+    return joined
+
+
+def _logical(lines: list[str]) -> list[str]:
+    """The commands a stage actually runs: unfolded, heredocs dropped, no comments.
+
+    A heredoc body is data, not commands — leaving it in would let a
+    `<<'EOF'` block supply a `sha256sum -c` or a `LABEL` line that the shell
+    never executes, and the image would ship unverified and unlabelled.
+    """
+    out: list[str] = []
+    terminator: str | None = None
+    strip_tabs = False
+    for raw in _unfold(lines):
+        if terminator is not None:
+            candidate = raw.lstrip("\t") if strip_tabs else raw
+            if candidate.strip() == terminator:
+                terminator = None
+            continue
+        for m in _HEREDOC_RE.finditer(raw):
+            terminator = m.group("word")
+            strip_tabs = m.group("dash") == "-"
+            break
+        out.append(_strip_shell_comment(raw))
+    return out
 
 
 def _strip_shell_comment(line: str) -> str:
-    """Remove a trailing `#` comment, respecting quotes and backslash escapes."""
+    """Remove a trailing `#` comment using the shell's own rule.
+
+    A `#` only opens a comment at the start of a word, so `${VAR#prefix}`,
+    `a#b`, and a backslash-escaped `#` are all literal text. Getting this
+    wrong in the strict direction would truncate a real command and reject a
+    good Dockerfile.
+    """
     out: list[str] = []
     quote: str | None = None
     i = 0
@@ -189,33 +241,55 @@ def _strip_shell_comment(line: str) -> str:
         elif ch in "\"'":
             quote = ch
             out.append(ch)
-        elif ch == "#":
-            # Only a `#` outside quotes starts a comment; everything from here
-            # on is what the shell would ignore.
-            break
+        elif ch == "#" and (not out or out[-1].isspace()):
+            break  # a `#` at a word boundary starts a comment
         else:
             out.append(ch)
         i += 1
     return "".join(out).strip()
 
 
-def _run_body(lines: list[str]) -> str:
-    """The executable text of one stage, continuations joined, comments gone."""
-    return "\n".join(_logical(lines))
+def _unquoted(text: str) -> str:
+    """Blank out quoted spans so operators inside strings are not operators."""
+    out: list[str] = []
+    quote: str | None = None
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if quote == '"' and ch == "\\" and i + 1 < len(text):
+            out.append("  ")
+            i += 2
+            continue
+        if quote:
+            out.append(" ")
+            if ch == quote:
+                quote = None
+        elif ch in "\"'":
+            quote = ch
+            out.append(" ")
+        else:
+            out.append(ch)
+        i += 1
+    return "".join(out)
 
 
-def _segments(line: str) -> list[str]:
-    """Split one unfolded command into its `&&`/`||`/`;`/`|`-separated parts.
+def _segments(line: str) -> list[tuple[str, str]]:
+    """Split one command into `&&`/`||`/`;` parts, each with its trailing separator.
 
-    Separators inside quotes are not separators; ignoring that can only make a
-    segment *larger* than reality, so a check scoped to a segment stays sound.
+    A single `|` is deliberately *not* a separator: `echo "$H  f" | sha256sum -c -`
+    is one command whose data and check belong together. It is handled instead
+    by `check_dockerfile`, which rejects any pipe appearing after the marker.
     """
-    parts: list[str] = []
+    parts: list[tuple[str, str]] = []
     current: list[str] = []
     quote: str | None = None
     i = 0
     while i < len(line):
         ch = line[i]
+        if quote == '"' and ch == "\\" and i + 1 < len(line):
+            current.append(line[i: i + 2])
+            i += 2
+            continue
         if quote:
             current.append(ch)
             if ch == quote:
@@ -223,24 +297,194 @@ def _segments(line: str) -> list[str]:
         elif ch in "\"'":
             quote = ch
             current.append(ch)
-        elif ch == "&" and line[i: i + 2] == "&&":
-            parts.append("".join(current))
-            current = []
-            i += 2
-            continue
-        elif ch == "|" and line[i: i + 2] in ("|", "||"):
-            parts.append("".join(current))
+        elif line[i: i + 2] in ("&&", "||"):
+            parts.append(("".join(current), line[i: i + 2]))
             current = []
             i += 2
             continue
         elif ch == ";":
-            parts.append("".join(current))
+            parts.append(("".join(current), ";"))
             current = []
         else:
             current.append(ch)
         i += 1
-    parts.append("".join(current))
+    parts.append(("".join(current), ""))
     return parts
+
+
+def _curl_outputs(line: str) -> set[str]:
+    """Paths a `curl` in this command writes, via `-o`/`--output` in any spelling.
+
+    Walks tokens outside quotes so `-o` inside a URL query string is not read
+    as a flag, and accepts `--output=`, `--output `, `-o `, and bundled short
+    flags like `-sfo`. Shell redirection counts too: `curl … > /tmp/f.tar.xz`
+    writes the download just as verifiably, and refusing to model it would
+    only push a maintainer back toward a form the gate cannot follow.
+    """
+    targets: set[str] = set()
+    tokens = _tokens_outside_quotes(line)
+    for i, tok in enumerate(tokens):
+        if tok.startswith("--output="):
+            targets.add(tok.split("=", 1)[1])
+        elif tok == "--output" and i + 1 < len(tokens):
+            targets.add(tokens[i + 1])
+        elif re.fullmatch(r"-[A-Za-z]*o[A-Za-z]*", tok) and i + 1 < len(tokens):
+            targets.add(tokens[i + 1])
+        elif tok in (">", ">>") and i + 1 < len(tokens):
+            targets.add(tokens[i + 1])
+        elif tok.startswith(">") and len(tok) > 1:
+            targets.add(tok[1:].lstrip(">"))
+    return targets
+
+
+def _tokens_outside_quotes(line: str) -> list[str]:
+    """Whitespace-split tokens, keeping quoted runs intact as one token."""
+    tokens: list[str] = []
+    current: list[str] = []
+    quote: str | None = None
+    for ch in line:
+        if quote:
+            current.append(ch)
+            if ch == quote:
+                quote = None
+                tokens.append("".join(current))
+                current = []
+        elif ch in "\"'":
+            quote = ch
+            current.append(ch)
+        elif ch.isspace():
+            if current:
+                tokens.append("".join(current))
+                current = []
+        else:
+            current.append(ch)
+    if current:
+        tokens.append("".join(current))
+    return tokens
+
+
+def _check_verified(fetcher_code: list[str], report: Report) -> None:
+    """The check must run, read the selected pin, cover the download, and matter."""
+    where = "Dockerfile/ffmpeg-fetcher"
+    verifying = [line for line in fetcher_code if "sha256sum -c" in line]
+    if not verifying:
+        report.fail(
+            where,
+            "the download is never verified — no `sha256sum -c` against the pinned hash",
+        )
+        return
+
+    # Variable references are matched in the *raw* segment text (the real
+    # Dockerfile quotes them: `-z "$FFMPEG_SHA256"`), while operators are
+    # matched in the unquoted form. Both are scoped to a single command so a
+    # mention elsewhere in the folded RUN cannot vouch for this one.
+    # `curl` must be the command being run, not merely a package name in
+    # `apk add --no-cache curl xz`.
+    curl_cmd = re.compile(r"(?:^|&&|\|\||;|\|)\s*curl(?:\s|$)")
+    curl_segments = [
+        text
+        for line in fetcher_code
+        for text, _ in _segments(line)
+        if curl_cmd.search(_unquoted(text))
+    ]
+    if not curl_segments:
+        report.fail(
+            where,
+            "no curl download found in the fetcher, so there is nothing to verify",
+        )
+        return
+    for text in curl_segments:
+        if not re.search(RELEASE_VAR, text):
+            report.fail(
+                where,
+                "the download URL does not use `$FFMPEG_RELEASE`; the pinned release "
+                "must be what is actually fetched",
+            )
+    downloaded: set[str] = set()
+    for text in curl_segments:
+        downloaded |= _curl_outputs(text)
+    # Fail closed: if no download target can be identified, coverage is unknown.
+    if not downloaded:
+        report.fail(
+            where,
+            "cannot identify what curl writes, so the download cannot be shown to "
+            "be verified",
+        )
+        return
+
+    for line in verifying:
+        for text, sep in _segments(line):
+            marker = text.find("sha256sum -c")
+            if marker < 0:
+                continue
+            head, tail = text[:marker], text[marker:]
+            # Everything after the marker decides the exit status.
+            if "|" in _unquoted(tail) or re.search(r"(?<![>&])&\s*$", _unquoted(tail)):
+                report.fail(
+                    where,
+                    "the `sha256sum -c` status is overwritten (a pipe or `&` after "
+                    "it); a failed check must abort the build",
+                )
+            if sep == "||":
+                report.fail(
+                    where,
+                    "the `sha256sum -c` result is discarded (`|| …`); a failed check "
+                    "must abort the build",
+                )
+            if sep == ";":
+                # `sha256sum -c - ; echo done` exits 0 regardless of the check.
+                report.fail(
+                    where,
+                    "a command after the `sha256sum -c` overwrites its exit status "
+                    "(`;`); a failed check must abort the build",
+                )
+            # A leading `!` inverts the verdict, so a mismatch exits 0.
+            if re.search(r"(?:^|\s)!(?=\s|$)", _unquoted(head)):
+                report.fail(
+                    where,
+                    "the `sha256sum -c` result is inverted (`!`); a failed check must "
+                    "abort the build",
+                )
+            if not re.search(SELECTED_SHA_VAR, text):
+                report.fail(
+                    where,
+                    "the checksum check does not read the selected `$FFMPEG_SHA256`; "
+                    "it verifies something other than the pin",
+                )
+            if not {p for p in downloaded if p in text}:
+                report.fail(
+                    where,
+                    f"`sha256sum -c` does not check the downloaded tarball "
+                    f"({', '.join(sorted(downloaded))}); it is fetched unverified",
+                )
+    if any(re.search(r"\bset\s+\+e\b", line) for line in fetcher_code):
+        report.fail(
+            where,
+            "the fetcher disables errexit (`set +e`), so a failed check would not "
+            "abort the build",
+        )
+
+
+def _check_empty_guard(fetcher_code: list[str], report: Report) -> None:
+    """A missing pin must fail the build, not merely be noticed."""
+    where = "Dockerfile/ffmpeg-fetcher"
+    guard = re.compile(r"-z\s+\"?" + SELECTED_SHA_VAR)
+    for line in fetcher_code:
+        m = guard.search(line)
+        if not m:
+            continue
+        # The `if` body runs from the test to the block's own closing `fi`.
+        # Match `fi` as a word: a bare `find` also matches inside "unverified",
+        # and the diagnostics in this very block contain such words.
+        rest = line[m.start():]
+        end = _CLOSING_FI.search(rest)
+        if _FAILURE_ACTIONS.search(rest[: end.start()] if end else rest):
+            return
+    report.fail(
+        where,
+        "no empty-checksum guard that fails the build. A build must abort when the "
+        "expected SHA-256 is missing rather than skipping verification.",
+    )
 
 
 def _arg_defaults(lines: list[str]) -> dict[str, str]:
@@ -283,12 +527,13 @@ def check_dockerfile(path: Path, report: Report) -> None:
         return
 
     release = fetcher["FFMPEG_RELEASE"]
-    if not RELEASE_RE.match(release):
+    if not RELEASE_RE.match(release) or not _is_real_date(release):
         report.fail(
             "Dockerfile/ffmpeg-fetcher",
             f"FFMPEG_RELEASE={release!r} is not a dated autobuild-* tag. "
             "`latest` is a mutable ref whose assets are replaced in place; pin a "
-            "month-end build, which BtbN retains for two years.",
+            "build BtbN retains, which for a long-lived image means one of the "
+            "month-end tags it keeps for two years.",
         )
 
     for arch in ARCHES:
@@ -307,55 +552,20 @@ def check_dockerfile(path: Path, report: Report) -> None:
                 f"FFMPEG_SHA256_{arch}={digest!r} is not a 64-char lowercase hex "
                 "SHA-256. Every download needs a non-empty expected checksum.",
             )
+    if fetcher["FFMPEG_BUILD_AMD64"] == fetcher["FFMPEG_BUILD_ARM64"]:
+        report.fail(
+            "Dockerfile/ffmpeg-fetcher",
+            "both architectures name the same asset, so one of them downloads the "
+            "wrong binary",
+        )
 
     # (3) verified: the pin has to actually gate the build, in real code.
     # Reason over the *unfolded, comment-stripped* command list, because that
     # is what the shell runs: Docker joins `\` continuations into one command,
     # and a `#` mid-line comments out the rest of the physical line.
     fetcher_code = _logical(fetcher_lines)
-    verifying = [l for l in fetcher_code if "sha256sum -c" in l]
-    if not verifying:
-        report.fail(
-            "Dockerfile/ffmpeg-fetcher",
-            "the download is never verified — no `sha256sum -c` against the pinned hash",
-        )
-    else:
-        for line in verifying:
-            swallowed = next((p for p in _FAILURE_DISCARDS if p in line), None)
-            if swallowed:
-                report.fail(
-                    "Dockerfile/ffmpeg-fetcher",
-                    f"the `sha256sum -c` result is discarded (`{swallowed}`); a failed "
-                    "check must abort the build",
-                )
-        # The check has to cover the artifact that was downloaded, not some
-        # other file in the stage. Match within the individual command, so an
-        # unrelated `rm -rf <path>` later in the same RUN cannot vouch for it.
-        downloaded = {
-            m.group(1)
-            for line in fetcher_code
-            for m in re.finditer(r"-o\s+(\S+)", line)
-        }
-        checked = {
-            path.strip("\"'")
-            for line in verifying
-            for segment in _segments(line)
-            if "sha256sum -c" in segment
-            for path in downloaded
-            if path in segment
-        }
-        if downloaded and checked != downloaded:
-            report.fail(
-                "Dockerfile/ffmpeg-fetcher",
-                f"`sha256sum -c` does not check the downloaded tarball "
-                f"({', '.join(sorted(downloaded))}); it is fetched unverified",
-            )
-    if not any(re.search(r'-z\s+"?\$\{?FFMPEG_SHA256', l) for l in fetcher_code):
-        report.fail(
-            "Dockerfile/ffmpeg-fetcher",
-            "no empty-checksum guard. A build must fail outright when the expected "
-            "SHA-256 is missing rather than skipping verification.",
-        )
+    _check_verified(fetcher_code, report)
+    _check_empty_guard(fetcher_code, report)
 
     # (4) labelled: the final stage must advertise exactly what was verified.
     for name in ARG_NAMES:
@@ -416,10 +626,18 @@ def check_dockerfile(path: Path, report: Report) -> None:
 def check_proxmox_script(path: Path, dockerfile: Path, report: Report) -> None:
     """(5) mirrored — the CT builder ships the same binary."""
     text = path.read_text(encoding="utf-8")
+    # `(^|\s)` so an indented or `export`ed assignment is still seen — the
+    # shell honours both, and last assignment wins. Comment lines are dropped
+    # first: a commented-out assignment changes nothing at runtime.
+    live = "\n".join(
+        line for line in text.splitlines() if not line.lstrip().startswith("#")
+    )
     shell = {
         name: value
         for name, value in re.findall(
-            r"^(FFMPEG_[A-Z0-9_]+)=\"?([^\"\s]+)\"?\s*(?:#.*)?$", text, re.MULTILINE
+            r"(?:^|\s)(?:export\s+|readonly\s+)?(FFMPEG_[A-Z0-9_]+)=\"?([^\"\s]+)\"?\s*(?:#.*)?$",
+            live,
+            re.MULTILINE,
         )
     }
     stages = _split_stages(dockerfile.read_text(encoding="utf-8"))
