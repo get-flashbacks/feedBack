@@ -3179,7 +3179,12 @@ class MetadataDB:
         except (TypeError, ValueError):
             dur = "0"
         raw = "|".join([norm(artist), norm(title), norm(album), dur])
-        return hashlib.new(algorithm, raw.encode("utf-8")).hexdigest()
+        # Identity/dedup key, not a security boundary — this may compute a
+        # legacy SHA-1 digest purely to detect and re-stamp old rows during
+        # the sha1->sha256 migration (see the two call sites above).
+        # usedforsecurity=False tells hashlib (and SAST tools) that's the
+        # intended, non-cryptographic use.
+        return hashlib.new(algorithm, raw.encode("utf-8"), usedforsecurity=False).hexdigest()
 
     def enrichment_pending(self, limit: int = 500,
                            allowed_keys: frozenset | None = None) -> list[dict]:
