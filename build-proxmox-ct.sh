@@ -90,14 +90,16 @@ VGMSTREAM_REPO="https://github.com/vgmstream/vgmstream.git"
 # Static ffmpeg binaries from BtbN/FFmpeg-Builds (GPL, 7.1 series).
 # To bump: pick a new autobuild-* tag from
 #   https://github.com/BtbN/FFmpeg-Builds/releases
-# download the two linux gpl-7.1 tarballs, re-run
+# that still publishes 7.1 GPL linux builds, download the two
+# linux gpl-7.1 tarballs, re-run
 #   sha256sum ffmpeg-*-linux{64,arm64}-gpl-7.1.tar.xz
 # and update FFMPEG_RELEASE + both builds + hashes below.
-FFMPEG_RELEASE="autobuild-2026-06-01-15-02"
-FFMPEG_BUILD_AMD64="ffmpeg-n7.1.4-7-gadcf20da26-linux64-gpl-7.1.tar.xz"
-FFMPEG_BUILD_ARM64="ffmpeg-n7.1.4-7-gadcf20da26-linuxarm64-gpl-7.1.tar.xz"
-FFMPEG_SHA256_AMD64=afde55344990650c117fbb7cb36b38d2ab6790b06beb06a9c43a9300c9ce277a
-FFMPEG_SHA256_ARM64=03c8a7d9a7cf48d017a22a7c31acfdc8e76c5cb193923f883b0338c7baf0bd28
+# MUST match the Dockerfile's ffmpeg pins (same release + hashes).
+FFMPEG_RELEASE="autobuild-2026-07-31-14-10"
+FFMPEG_BUILD_AMD64="ffmpeg-n7.1.5-12-g1fdbca85aa-linux64-gpl-7.1.tar.xz"
+FFMPEG_BUILD_ARM64="ffmpeg-n7.1.5-12-g1fdbca85aa-linuxarm64-gpl-7.1.tar.xz"
+FFMPEG_SHA256_AMD64=c1e6caf48923dd8e6bc5e54d51ba70c321175b8162ae9c414c392990e72f0e79
+FFMPEG_SHA256_ARM64=a9a50c5782ef5e45306d58d1a9a819015b472d8da30ab6a77f15f571c861a71b
 
 APP_DIR="/app"
 VENV_DIR="/opt/app-venv"
