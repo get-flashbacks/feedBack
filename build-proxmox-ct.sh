@@ -194,9 +194,14 @@ done
 # =============================================================================
 # Pre-flight: verify the pinned BtbN FFmpeg release still exists
 # =============================================================================
-# BtbN only keeps ~10 days of autobuilds. A stale FFMPEG_RELEASE means
-# the build will 404 deep into step 5b after significant setup work.
-# Fail fast with actionable instructions instead.
+# BtbN keeps month-end autobuilds for two years (its README "Release
+# Retention Policy"), so FFMPEG_RELEASE below is a month-end tag with a
+# ~2-year lifetime. It still needs this check: the tag is deleted without
+# notice when the window closes, and also disappears early if a rename or
+# a publication gap ever removes the 7.1 GPL linux assets from a release
+# that is otherwise still listed. A stale FFMPEG_RELEASE means the build
+# will 404 deep into step 5b after significant setup work, so fail fast
+# with actionable instructions instead.
 info "Checking ffmpeg release availability …"
 case "$TARGETARCH" in
   arm64) _preflight_tarball="${FFMPEG_BUILD_ARM64}" ;;
@@ -209,23 +214,30 @@ if [[ ! "$_http_code" =~ ^2[0-9]{2}$ ]]; then
 
        URL: ${_preflight_url}
 
-       BtbN/FFmpeg-Builds only keeps ~10 days of autobuilds.
+       BtbN/FFmpeg-Builds keeps the last build of each month for two
+       years, and only publishes a series while it is current — the
+       7.1 GPL linux assets may be gone from newer tags.
        To fix, update these variables in build-proxmox-ct.sh:
 
-         1. Pick a current release tag from:
+         1. Pick a month-end release tag (autobuild-YYYY-MM-DD-HH-MM)
+            that still publishes the GPL linux builds you want:
             https://github.com/BtbN/FFmpeg-Builds/releases
 
-         2. Update FFMPEG_RELEASE to the new tag
-            (e.g. autobuild-YYYY-MM-DD-HH-MM)
+         2. Update FFMPEG_RELEASE to that tag
 
          3. Update FFMPEG_BUILD_AMD64 and FFMPEG_BUILD_ARM64
-            to the new *-linux64-gpl-7.1.tar.xz and
-            *-linuxarm64-gpl-7.1.tar.xz filenames
+            to that release's filenames, e.g.
+            ffmpeg-n7.1.5-12-g1fdbca85aa-linux64-gpl-7.1.tar.xz
+            ffmpeg-n7.1.5-12-g1fdbca85aa-linuxarm64-gpl-7.1.tar.xz
+            (a name containing -latest- floats; use the
+            versioned -g<commit> name)
 
          4. Update FFMPEG_SHA256_AMD64 and FFMPEG_SHA256_ARM64
             from the checksums.sha256 file in that release
 
-       Also update the same ARGs in Dockerfile"
+       Also update the same five ARGs in the Dockerfile (stage 1c and
+       the final stage's labels). CI (tools/check_docker_pins.py)
+       fails the build if the two files disagree."
 fi
 ok "ffmpeg release verified (HTTP ${_http_code})."
 
