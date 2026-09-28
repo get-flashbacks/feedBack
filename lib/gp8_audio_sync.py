@@ -39,11 +39,12 @@ Usage in convert_file():
 """
 
 import logging
-import xml.etree.ElementTree as ET
 import zipfile
 import io
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from safe_xml import safe_fromstring
 
 _log = logging.getLogger("feedBack.lib.gp8_audio_sync")
 
@@ -56,20 +57,14 @@ _AUDIO_ASSET_EXTS = ('.ogg', '.mp3', '.m4a', '.aac', '.wav', '.flac', '.opus', '
 
 
 def _parse_gpif(data: bytes):
-    """Parse GPIF XML bytes with defusedxml when available, stdlib otherwise.
+    """Parse GPIF XML bytes via the shared hardened parser (lib/safe_xml.py).
 
-    Centralised so every caller hardens parsing the same way (no divergent
-    inline try/except blocks).
+    score.gpif comes from an imported .gp/.gpx file — attacker-influenceable
+    input — so this delegates to safe_fromstring() rather than a local
+    defusedxml-or-stdlib try/except, keeping this call site's hardening in
+    lockstep with every other untrusted-XML parse path.
     """
-    try:
-        import defusedxml.ElementTree as _safe_ET
-        return _safe_ET.fromstring(data)
-    except ImportError:
-        _log.warning(
-            'gp8_audio_sync: defusedxml not installed; parsing with stdlib '
-            'xml.etree (install defusedxml for hardened parsing)'
-        )
-        return ET.fromstring(data)
+    return safe_fromstring(data)
 
 
 def _asset_path_from_registry(root, asset_id: str) -> str | None:

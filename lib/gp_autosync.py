@@ -44,6 +44,8 @@ import zipfile
 import io
 from pathlib import Path
 
+from safe_xml import safe_fromstring
+
 _log = logging.getLogger("feedBack.lib.gp_autosync")
 
 # ── Dependency check ──────────────────────────────────────────────────────────
@@ -67,20 +69,14 @@ def is_available() -> bool:
 from gp8_audio_sync import GpSyncData, SyncPoint
 
 def _parse_gpif_bytes(data: bytes) -> 'ET.Element':
-    """Parse GPIF XML bytes using defusedxml when available, stdlib otherwise.
+    """Parse GPIF XML bytes via the shared hardened parser (lib/safe_xml.py).
 
-    defusedxml prevents XML attacks (XXE, billion laughs) from maliciously
-    crafted GP files. Falls back to stdlib with a warning if not installed.
+    score.gpif comes from an imported .gp/.gpx file — attacker-influenceable
+    input — so this delegates to safe_fromstring() rather than a local
+    defusedxml-or-stdlib try/except, keeping this call site's hardening in
+    lockstep with every other untrusted-XML parse path.
     """
-    try:
-        import defusedxml.ElementTree as _dxml
-        return _dxml.fromstring(data)
-    except ImportError:
-        _log.warning(
-            'gp_autosync: defusedxml not installed; '
-            'parsing GPIF with stdlib xml.etree (install defusedxml for hardened parsing)'
-        )
-        return ET.fromstring(data)
+    return safe_fromstring(data)
 
 
 class _Gp345FileError(ValueError):
