@@ -32,7 +32,8 @@ sniffio>=1.3.1
 
 # Hardened XML parsing for untrusted GP/arrangement imports (security audit,
 # issue #45) — guards xml.etree.ElementTree's entity-expansion ("billion
-# laughs") DoS. Used by lib/safe_xml.py, lib/gp8_audio_sync.py, and
-# lib/gp_autosync.py, all of which fall back to stdlib xml.etree with a
-# logged warning if this is somehow absent at runtime.
+# laughs") DoS. lib/safe_xml.py is the single entry point every untrusted-XML
+# parse call site (lib/gp2rs_gpx.py, lib/gp8_audio_sync.py, lib/gp_autosync.py,
+# lib/loosefolder.py, lib/song.py, lib/routers/ws_highway.py) delegates to,
+# rather than each parsing independently.
 defusedxml>=0.7.1
