@@ -43,7 +43,7 @@ def _dockerfile(
     amd64_sha: str = AMD64_SHA,
     arm64_sha: str = ARM64_SHA,
     verify: bool = True,
-    swallow: bool = False,
+    swallow: str = "",
     empty_guard: bool = True,
     final_release: str | None = None,
     labels: bool = True,
@@ -53,8 +53,12 @@ def _dockerfile(
 ) -> str:
     """Render a Dockerfile. Every knob defaults to the *passing* shape."""
     if verify:
-        tail = " -" if not swallow else " - || true -"
-        verify_block = f'    && echo "${{FFMPEG_SHA256}}  /tmp/ffmpeg.tar.xz" | sha256sum -c{tail} \\\n'
+        # `swallow` is the text a maintainer would append to disable the check.
+        verify_block = (
+            f'    && echo "${{FFMPEG_SHA256}}  /tmp/ffmpeg.tar.xz" | sha256sum -c {swallow}\\\n'
+            if swallow
+            else '    && echo "${FFMPEG_SHA256}  /tmp/ffmpeg.tar.xz" | sha256sum -c - \\\n'
+        )
     else:
         verify_block = ""
     guard_block = (
@@ -103,6 +107,7 @@ def _proxmox(
     amd64_tarball: str = AMD64_TARBALL,
     arm64_tarball: str = ARM64_TARBALL,
     amd64_sha: str = AMD64_SHA,
+    arm64_sha: str = ARM64_SHA,
 ) -> str:
     """The CT builder's pins — pass matching values to keep it in sync."""
     return (
@@ -110,7 +115,7 @@ def _proxmox(
         f'FFMPEG_BUILD_AMD64="{amd64_tarball}"\n'
         f'FFMPEG_BUILD_ARM64="{arm64_tarball}"\n'
         f"FFMPEG_SHA256_AMD64={amd64_sha}\n"
-        f"FFMPEG_SHA256_ARM64={ARM64_SHA}\n"
+        f"FFMPEG_SHA256_ARM64={arm64_sha}\n"
     )
 
 
@@ -137,6 +142,7 @@ def _synced(tmp_path: Path, **kwargs) -> list[str]:
         amd64_tarball=kwargs.get("amd64_tarball", AMD64_TARBALL),
         arm64_tarball=kwargs.get("arm64_tarball", ARM64_TARBALL),
         amd64_sha=kwargs.get("amd64_sha", AMD64_SHA),
+        arm64_sha=kwargs.get("arm64_sha", ARM64_SHA),
     )
     return _errors(tmp_path, dockerfile, proxmox)
 
@@ -177,7 +183,20 @@ def test_the_reported_issue_state_is_rejected(tmp_path):
         amd64_sha="",
     )
     errors = _errors(tmp_path, dockerfile, proxmox)
-    assert len(errors) >= 8, errors
+    assert len(errors) == 14, errors
+    # Every one of those must be about a property #105 broke. If the count
+    # were reachable with unrelated errors, the smoke alarm would be noise.
+    for expected in (
+        "FFMPEG_RELEASE",
+        "FFMPEG_BUILD_AMD64",
+        "FFMPEG_BUILD_ARM64",
+        "FFMPEG_SHA256_AMD64",
+        "FFMPEG_SHA256_ARM64",
+        "never verified",
+        "empty-checksum guard",
+        "not provenance",
+    ):
+        assert any(expected in e for e in errors), (expected, errors)
 
 
 # ------------------------------------------------- (1) immutable-ref, (2) hashed
@@ -242,9 +261,96 @@ def test_a_comment_cannot_satisfy_the_empty_checksum_guard(tmp_path):
     assert [e for e in errors if "empty-checksum guard" in e], errors
 
 
+def test_a_missing_empty_checksum_guard_is_rejected(tmp_path):
+    # Without the guard, dropping the pin silently downgrades to no pin.
+    errors = _synced(tmp_path, empty_guard=False)
+    assert [e for e in errors if "empty-checksum guard" in e], errors
+
+
+def test_a_trailing_comment_on_a_proxmox_pin_is_tolerated(tmp_path):
+    # Fail-closed, but not noise: a documented pin is still a pin.
+    proxmox = _proxmox().replace(
+        f'FFMPEG_RELEASE="{RELEASE}"',
+        f'FFMPEG_RELEASE="{RELEASE}"  # month-end tag, retained two years',
+    )
+    assert _errors(tmp_path, _dockerfile(), proxmox) == []
+
+
+def test_a_later_reassignment_in_the_proxmox_script_is_rejected(tmp_path):
+    # The shell's last assignment wins, so the gate's must too.
+    errors = _errors(tmp_path, _dockerfile(), _proxmox() + 'FFMPEG_RELEASE="latest"\n')
+    assert [e for e in errors if "FFMPEG_RELEASE" in e], errors
+
+
 def test_a_swallowed_verification_result_is_rejected(tmp_path):
-    errors = _synced(tmp_path, swallow=True)
+    errors = _synced(tmp_path, swallow="|| true \\")
     assert [e for e in errors if "discarded" in e], errors
+
+
+def test_every_failure_discarding_construct_is_rejected(tmp_path):
+    # Docker folds `\` continuations into one command before running it, so a
+    # `|| true` on the *next* physical line swallows the check just as surely.
+    for discard in ("|| true", "|| :", "|| exit 0", "set +e"):
+        errors = _synced(tmp_path, swallow=discard)
+        assert [e for e in errors if "discarded" in e], (discard, errors)
+
+
+def test_an_inline_comment_cannot_hide_a_verification(tmp_path):
+    # `echo ok # && … sha256sum -c` prints `ok` and checks nothing. The gate
+    # must judge the command the shell runs, not the line's text.
+    dockerfile = _dockerfile().replace(
+        '    && echo "${FFMPEG_SHA256}  /tmp/ffmpeg.tar.xz" | sha256sum -c - \\',
+        '    && echo ok # && echo "${FFMPEG_SHA256}  /tmp/ffmpeg.tar.xz" | sha256sum -c - \\',
+    )
+    errors = _errors(tmp_path, dockerfile, _proxmox())
+    assert [e for e in errors if "never verified" in e], errors
+
+
+def test_an_inline_comment_cannot_hide_the_empty_checksum_guard(tmp_path):
+    dockerfile = _dockerfile().replace(
+        '    && if [ -z "$FFMPEG_SHA256" ]; then exit 1; fi \\',
+        '    && echo ok # && if [ -z "$FFMPEG_SHA256" ]; then exit 1; fi \\',
+    )
+    errors = _errors(tmp_path, dockerfile, _proxmox())
+    assert [e for e in errors if "empty-checksum guard" in e], errors
+
+
+def test_a_hash_check_on_an_unrelated_file_is_rejected(tmp_path):
+    # The check has to cover the artifact that was downloaded.
+    dockerfile = _dockerfile().replace("/tmp/ffmpeg.tar.xz\" | sha256sum", "/tmp/other\" | sha256sum")
+    errors = _errors(tmp_path, dockerfile, _proxmox())
+    assert [e for e in errors if "unverified" in e], errors
+
+
+def test_a_decoy_stage_cannot_absorb_the_fetcher_checks(tmp_path):
+    # `AS ffmpeg-fetcher-cache` contains the marker as a substring; if that
+    # stage were matched, a decoy could vouch for a real fetcher that is
+    # pinned to `latest` and verifies nothing.
+    decoy = (
+        "FROM alpine:3.20 AS ffmpeg-fetcher-cache\n"
+        f"ARG FFMPEG_RELEASE={RELEASE}\n"
+        f"ARG FFMPEG_BUILD_AMD64={AMD64_TARBALL}\n"
+        f"ARG FFMPEG_BUILD_ARM64={ARM64_TARBALL}\n"
+        f"ARG FFMPEG_SHA256_AMD64={AMD64_SHA}\n"
+        f"ARG FFMPEG_SHA256_ARM64={ARM64_SHA}\n"
+        "RUN echo x | sha256sum -c - && if [ -z \"$FFMPEG_SHA256\" ]; then exit 1; fi\n"
+        "\n"
+    )
+    broken = _dockerfile(release="latest", verify=False, empty_guard=False)
+    broken = broken.replace("FROM alpine:3.20 AS ffmpeg-fetcher\n", decoy + "FROM alpine:3.20 AS ffmpeg-fetcher\n", 1)
+    errors = _errors(tmp_path, broken, _proxmox())
+    assert [e for e in errors if "FFMPEG_RELEASE" in e], errors
+    assert [e for e in errors if "never verified" in e], errors
+
+
+def test_a_lowercase_or_indented_from_is_still_recognised(tmp_path):
+    # Dockerfile keywords are case-insensitive; a reformat must not be
+    # misreported as a missing fetcher stage.
+    dockerfile = _dockerfile().replace(
+        "FROM alpine:3.20 AS ffmpeg-fetcher", "  from alpine:3.20 as ffmpeg-fetcher"
+    )
+    errors = _errors(tmp_path, dockerfile, _proxmox())
+    assert errors == []
 
 
 # ------------------------------------------------------------------- (4) labelled
@@ -275,7 +381,7 @@ def test_an_intermediate_stage_cannot_satisfy_the_final_stage(tmp_path):
         tmp_path, final_args=False, labels=False, middle_stage=middle
     )
     assert len([e for e in errors if "is not re-declared" in e]) == 5, errors
-    assert len([e for e in errors if "not provenance" in e]) == 5, errors
+    assert len([e for e in errors if "missing `LABEL" in e]) == 5, errors
 
 
 def test_a_label_in_an_intermediate_stage_does_not_satisfy_the_final_one(tmp_path):
@@ -291,7 +397,7 @@ def test_a_label_in_an_intermediate_stage_does_not_satisfy_the_final_one(tmp_pat
         "\n"
     )
     errors = _synced(tmp_path, labels=False, middle_stage=middle)
-    assert len([e for e in errors if "not provenance" in e]) == 5, errors
+    assert len([e for e in errors if "missing `LABEL" in e]) == 5, errors
 
 
 def test_a_label_must_reference_the_pin_not_hardcode_a_value(tmp_path):
@@ -302,7 +408,45 @@ def test_a_label_must_reference_the_pin_not_hardcode_a_value(tmp_path):
         f"org.feedBack.ffmpeg.sha256.amd64={AMD64_SHA}",
     )
     errors = _errors(tmp_path, dockerfile, _proxmox())
-    assert [e for e in errors if "sha256.amd64" in e and "misindirected" in e], errors
+    assert [e for e in errors if "does not interpolate" in e], errors
+
+
+def test_a_bare_arg_name_is_not_interpolation(tmp_path):
+    # Records the literal string `FFMPEG_SHA256_AMD64` as the hash.
+    dockerfile = _dockerfile().replace(
+        'org.feedBack.ffmpeg.sha256.amd64="${FFMPEG_SHA256_AMD64}"',
+        "org.feedBack.ffmpeg.sha256.amd64=FFMPEG_SHA256_AMD64",
+    )
+    errors = _errors(tmp_path, dockerfile, _proxmox())
+    assert [e for e in errors if "does not interpolate" in e], errors
+
+
+def test_a_shell_default_fallback_to_the_floating_ref_is_rejected(tmp_path):
+    # `${FFMPEG_RELEASE:-latest}` documents a silent downgrade to the ref
+    # this whole change exists to remove.
+    dockerfile = _dockerfile().replace(
+        'org.feedBack.ffmpeg.release="${FFMPEG_RELEASE}"',
+        'org.feedBack.ffmpeg.release="${FFMPEG_RELEASE:-latest}"',
+    )
+    errors = _errors(tmp_path, dockerfile, _proxmox())
+    assert [e for e in errors if "does not interpolate" in e], errors
+
+
+def test_key_value_lines_that_are_not_labels_are_rejected(tmp_path):
+    # `org.feedBack.ffmpeg.*=…` written into a RUN records nothing; the image
+    # would ship with no provenance labels at all.
+    dockerfile = _dockerfile(labels=False).replace(
+        "COPY --from=ffmpeg-fetcher",
+        'RUN printf \'%s\\n\' \\\n'
+        '      org.feedBack.ffmpeg.release="${FFMPEG_RELEASE}" \\\n'
+        '      org.feedBack.ffmpeg.source.amd64="${FFMPEG_BUILD_AMD64}" \\\n'
+        '      org.feedBack.ffmpeg.source.arm64="${FFMPEG_BUILD_ARM64}" \\\n'
+        '      org.feedBack.ffmpeg.sha256.amd64="${FFMPEG_SHA256_AMD64}" \\\n'
+        '      org.feedBack.ffmpeg.sha256.arm64="${FFMPEG_SHA256_ARM64}"\n'
+        "COPY --from=ffmpeg-fetcher",
+    )
+    errors = _errors(tmp_path, dockerfile, _proxmox())
+    assert len([e for e in errors if "missing `LABEL" in e]) == 5, errors
 
 
 def test_missing_hash_label_is_rejected(tmp_path):
@@ -310,12 +454,12 @@ def test_missing_hash_label_is_rejected(tmp_path):
         '      org.feedBack.ffmpeg.sha256.arm64="${FFMPEG_SHA256_ARM64}"\n', ""
     )
     errors = _errors(tmp_path, dockerfile, _proxmox())
-    assert [e for e in errors if "sha256.arm64" in e], errors
+    assert [e for e in errors if "missing `LABEL" in e], errors
 
 
 def test_all_labels_removed_is_rejected(tmp_path):
     errors = _synced(tmp_path, labels=False)
-    assert len([e for e in errors if "not provenance" in e]) == 5, errors
+    assert len([e for e in errors if "missing `LABEL" in e]) == 5, errors
 
 
 # -------------------------------------------------------------------- (5) mirrored
@@ -337,8 +481,12 @@ def test_missing_fetcher_stage_is_reported(tmp_path):
 
 
 def test_report_collects_every_failure_not_just_the_first(tmp_path):
+    # Assert the properties, not a count: the point is that the run does not
+    # stop at the first problem, so later independent failures still surface.
     errors = _synced(tmp_path, release="latest", amd64_sha="")
-    assert len(errors) == 3, errors
+    assert [e for e in errors if "FFMPEG_RELEASE" in e], errors
+    assert [e for e in errors if "not a 64-char" in e], errors
+    assert [e for e in errors if e.startswith("build-proxmox-ct.sh")], errors
 
 
 # ----------------------------------------------------------------------- entry
