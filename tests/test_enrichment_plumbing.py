@@ -89,9 +89,9 @@ def test_legacy_sha1_hashes_restamped_on_startup(tmp_path):
         assert row["match_state"] == "matched"   # settled state preserved…
         assert row["attempts"] == 3              # …and its failure backoff
         unchanged = fresh.get_enrichment("b.archive")
-        assert unchanged["content_hash"] == changed_hash
-        assert unchanged["content_hash"] != current_hash
-        assert unchanged["match_state"] == "matched"
+        assert unchanged["content_hash"] == changed_hash  # nosec B101 - pytest assertion, not a runtime check
+        assert unchanged["content_hash"] != current_hash  # nosec B101 - pytest assertion, not a runtime check
+        assert unchanged["match_state"] == "matched"  # nosec B101 - pytest assertion, not a runtime check
         assert unchanged["attempts"] == 4
         assert [r["filename"] for r in fresh.enrichment_pending()] == ["b.archive"]
     finally:
