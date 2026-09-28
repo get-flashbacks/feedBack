@@ -69,9 +69,12 @@ RUN cmake -S /tmp/vgmstream -B /tmp/vgmstream/build \
 # and update the five FFMPEG_* ARGs here *and* in stage 2 (which repeats
 # them for the labels) *and* the FFMPEG_* constants in
 # build-proxmox-ct.sh — it ships the same binary to the Proxmox CT.
-# tools/check_docker_pins.py (CI) enforces that those three places agree,
-# and will reject a name that has drifted back to a floating `-latest-`.
-# `ci / docker-pins` fails the build if the pins are missing or mutable.
+# tools/check_docker_pins.py (CI) enforces that those three places agree, and
+# that the verification below is real code the shell executes — it rejects a
+# name that drifted back to a floating `-latest-`, a check that is commented
+# out or has its result discarded (`|| true`, `|| exit 0`, `set +e`), a check
+# aimed at some other file, and a provenance label that no longer interpolates
+# the pin it claims to record.
 FROM alpine:3.20 AS ffmpeg-fetcher
 ARG TARGETARCH
 ARG FFMPEG_RELEASE=autobuild-2026-07-31-14-10
