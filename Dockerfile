@@ -35,28 +35,67 @@ RUN cmake -S /tmp/vgmstream -B /tmp/vgmstream/build \
 # download tools don't need any of Debian's TLS baggage.
 #
 # Source: BtbN/FFmpeg-Builds (GPL static build, 7.1 series).
-# BtbN retains only a short rolling window of dated autobuild releases, so a
-# dated URL eventually becomes a permanent 404. Use its maintained `latest`
-# release assets instead. HTTPS and the archive extraction provide the same
-# transport/format checks as the prior download; image digests remain the
-# reproducibility boundary for deployed builds.
+#
+# Pinned, never floating. BtbN documents its release retention policy as
+# "the last build of each month is kept for two years / the last 14 daily
+# builds are kept / the special 'latest' build floats" (README, "Release
+# Retention Policy"). So a month-end autobuild tag is a retained immutable
+# source, while `latest` is a mutable ref whose assets are replaced in place
+# — under `latest` two builds of the same commit can embed different
+# binaries, and the release/asset names recorded in the image labels below
+# cannot identify the bytes that actually shipped. HTTPS proves transport to
+# GitHub, not artifact identity; the SHA-256 ARGs do that, and the image
+# digest only identifies the already-built output.
+#
+# To bump: pick a month-end tag from
+#   https://github.com/BtbN/FFmpeg-Builds/releases
+# that still publishes the 7.1 GPL linux builds, then take the two
+# filenames and their hashes from that release's `checksums.sha256` asset
+# and update the five FFMPEG_* ARGs here *and* in stage 2 (which repeats
+# them for the labels) *and* the FFMPEG_* constants in
+# build-proxmox-ct.sh — it ships the same binary to the Proxmox CT.
+# `ci / docker-pins` fails the build if the pins are missing or mutable.
 FROM alpine:3.20 AS ffmpeg-fetcher
 ARG TARGETARCH
-ARG FFMPEG_RELEASE=latest
-ARG FFMPEG_BUILD_AMD64=ffmpeg-n7.1-latest-linux64-gpl-7.1.tar.xz
-ARG FFMPEG_BUILD_ARM64=ffmpeg-n7.1-latest-linuxarm64-gpl-7.1.tar.xz
+ARG FFMPEG_RELEASE=autobuild-2026-07-31-14-10
+ARG FFMPEG_BUILD_AMD64=ffmpeg-n7.1.5-12-g1fdbca85aa-linux64-gpl-7.1.tar.xz
+ARG FFMPEG_BUILD_ARM64=ffmpeg-n7.1.5-12-g1fdbca85aa-linuxarm64-gpl-7.1.tar.xz
+ARG FFMPEG_SHA256_AMD64=c1e6caf48923dd8e6bc5e54d51ba70c321175b8162ae9c414c392990e72f0e79
+ARG FFMPEG_SHA256_ARM64=a9a50c5782ef5e45306d58d1a9a819015b472d8da30ab6a77f15f571c861a71b
 RUN apk add --no-cache curl xz \
     && arch="${TARGETARCH:-$(apk --print-arch)}" \
     && case "$arch" in \
-         arm64|aarch64) FFMPEG_TARBALL="${FFMPEG_BUILD_ARM64}" ;; \
-         amd64|x86_64)  FFMPEG_TARBALL="${FFMPEG_BUILD_AMD64}" ;; \
+         arm64|aarch64) FFMPEG_TARBALL="${FFMPEG_BUILD_ARM64}"; FFMPEG_SHA256="${FFMPEG_SHA256_ARM64}" ;; \
+         amd64|x86_64)  FFMPEG_TARBALL="${FFMPEG_BUILD_AMD64}"; FFMPEG_SHA256="${FFMPEG_SHA256_AMD64}" ;; \
          *) echo "Unsupported arch: $arch" >&2; exit 1 ;; \
        esac \
+    && if [ -z "$FFMPEG_SHA256" ]; then \
+         echo "No FFMPEG_SHA256 pinned for ${arch} (${FFMPEG_TARBALL}) — refusing to build." >&2; \
+         echo "Pin the SHA-256 from ${FFMPEG_RELEASE}'s checksums.sha256. There is deliberately no bypass flag: an unverified ffmpeg binary is not worth the build." >&2; \
+         exit 1; \
+       fi \
     && curl -fsSL "https://github.com/BtbN/FFmpeg-Builds/releases/download/${FFMPEG_RELEASE}/${FFMPEG_TARBALL}" -o /tmp/ffmpeg.tar.xz \
+    && echo "${FFMPEG_SHA256}  /tmp/ffmpeg.tar.xz" | sha256sum -c - \
     && mkdir -p /tmp/ffmpeg-extract /out \
     && tar -xJf /tmp/ffmpeg.tar.xz -C /tmp/ffmpeg-extract --strip-components=1 \
     && cp /tmp/ffmpeg-extract/bin/ffmpeg /tmp/ffmpeg-extract/bin/ffprobe /out/ \
     && cp /tmp/ffmpeg-extract/LICENSE.txt /out/LICENSE.txt \
+    && printf '%s\n' \
+         "ffmpeg/ffprobe in this image are static GPL builds from BtbN/FFmpeg-Builds." \
+         "" \
+         "  Release: ${FFMPEG_RELEASE}" \
+         "  Tarball: ${FFMPEG_TARBALL}" \
+         "  SHA-256: ${FFMPEG_SHA256}" \
+         "" \
+         "Verified against the pinned hash at build time; see the" \
+         "org.feedBack.ffmpeg.* image labels for the same values." \
+         "" \
+         "Corresponding source (GPL):" \
+         "  - Build recipe + scripts: https://github.com/BtbN/FFmpeg-Builds/tree/${FFMPEG_RELEASE}" \
+         "  - Upstream FFmpeg:      https://github.com/FFmpeg/FFmpeg" \
+         "    (the ffmpeg commit baked in is identified by the n7.1.x tag in" \
+         "    the tarball name, e.g. n7.1.5-12-g1fdbca85aa -> g1fdbca85aa)" \
+         > /out/PROVENANCE.txt \
     && rm -rf /tmp/ffmpeg-extract /tmp/ffmpeg.tar.xz
 
 # ── Stage 1d: Build the Tailwind stylesheet over the FULL plugin set ──────
@@ -86,9 +125,13 @@ FROM python:3.12-slim
 # Re-declare the ffmpeg ARGs so their values are available to LABEL below.
 # ARG values don't cross stage boundaries in multi-stage builds; defaults
 # must be repeated here to take effect when no --build-arg is supplied.
-ARG FFMPEG_RELEASE=latest
-ARG FFMPEG_BUILD_AMD64=ffmpeg-n7.1-latest-linux64-gpl-7.1.tar.xz
-ARG FFMPEG_BUILD_ARM64=ffmpeg-n7.1-latest-linuxarm64-gpl-7.1.tar.xz
+# Keep these byte-identical to stage 1c — a build that pins a hash in the
+# fetcher but advertises a different one in the labels is worse than useless.
+ARG FFMPEG_RELEASE=autobuild-2026-07-31-14-10
+ARG FFMPEG_BUILD_AMD64=ffmpeg-n7.1.5-12-g1fdbca85aa-linux64-gpl-7.1.tar.xz
+ARG FFMPEG_BUILD_ARM64=ffmpeg-n7.1.5-12-g1fdbca85aa-linuxarm64-gpl-7.1.tar.xz
+ARG FFMPEG_SHA256_AMD64=c1e6caf48923dd8e6bc5e54d51ba70c321175b8162ae9c414c392990e72f0e79
+ARG FFMPEG_SHA256_ARM64=a9a50c5782ef5e45306d58d1a9a819015b472d8da30ab6a77f15f571c861a71b
 
 # Apply latest security updates to base packages (clears glibc deb13u3 and
 # similar). Done first so any subsequent installs resolve against the
@@ -155,7 +198,8 @@ RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
 #
 # NOTE (GPL): the static ffmpeg binary is licensed under GPL v2+.
 # LICENSE.txt from the BtbN tarball is copied into /usr/share/doc/ffmpeg/
-# so the license text is present in the runtime image.
+# so the license text is present in the runtime image, and PROVENANCE.txt
+# names the exact artefact plus where its corresponding source lives.
 #
 # If this image is redistributed publicly, the GPL requires that the
 # Corresponding Source for this ffmpeg build also be made available.
@@ -164,13 +208,16 @@ RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
 # Ensure your redistribution method meets GPL conveyance requirements —
 # either by pointing recipients to BtbN's source or by hosting it yourself.
 COPY --from=ffmpeg-fetcher /out/ffmpeg /out/ffprobe /usr/local/bin/
-COPY --from=ffmpeg-fetcher /out/LICENSE.txt /usr/share/doc/ffmpeg/LICENSE.txt
+COPY --from=ffmpeg-fetcher /out/LICENSE.txt /out/PROVENANCE.txt /usr/share/doc/ffmpeg/
 RUN chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe
 # Record provenance so the exact BtbN source can be located for GPL compliance
-# or debugging. Inspect with: docker inspect <image> | grep -A5 ffmpeg
+# or debugging — the release tag plus the two hashes are what actually identify
+# the bytes that shipped. Inspect with: docker inspect <image> | grep -A6 ffmpeg
 LABEL org.feedBack.ffmpeg.release="${FFMPEG_RELEASE}" \
       org.feedBack.ffmpeg.source.amd64="${FFMPEG_BUILD_AMD64}" \
       org.feedBack.ffmpeg.source.arm64="${FFMPEG_BUILD_ARM64}" \
+      org.feedBack.ffmpeg.sha256.amd64="${FFMPEG_SHA256_AMD64}" \
+      org.feedBack.ffmpeg.sha256.arm64="${FFMPEG_SHA256_ARM64}" \
       org.feedBack.ffmpeg.upstream="https://github.com/BtbN/FFmpeg-Builds"
 
 # Native vgmstream-cli built against the image's own libraries
