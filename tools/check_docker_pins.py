@@ -88,6 +88,9 @@ ARG_NAMES = (
 )
 
 FETCHER_MARKER = "ffmpeg-fetcher"
+# Where each class of failure is reported, so one run groups them by surface.
+FETCHER_WHERE = "Dockerfile/ffmpeg-fetcher"
+FINAL_WHERE = "Dockerfile/final"
 LABEL_PREFIX = "org.feedBack.ffmpeg."
 
 # The provenance the shipped image must carry: label key -> the build arg it
@@ -363,23 +366,16 @@ def _tokens_outside_quotes(line: str) -> list[str]:
     return tokens
 
 
-def _check_verified(fetcher_code: list[str], report: Report) -> None:
-    """The check must run, read the selected pin, cover the download, and matter."""
-    where = "Dockerfile/ffmpeg-fetcher"
-    verifying = [line for line in fetcher_code if "sha256sum -c" in line]
-    if not verifying:
-        report.fail(
-            where,
-            "the download is never verified — no `sha256sum -c` against the pinned hash",
-        )
-        return
+def _downloads(fetcher_code: list[str], report: Report) -> set[str] | None:
+    """The paths the fetcher's `curl` invocations write, or None if unknowable.
 
-    # Variable references are matched in the *raw* segment text (the real
-    # Dockerfile quotes them: `-z "$FFMPEG_SHA256"`), while operators are
-    # matched in the unquoted form. Both are scoped to a single command so a
-    # mention elsewhere in the folded RUN cannot vouch for this one.
+    Every download must be built from the pinned release, so a URL that never
+    references `$FFMPEG_RELEASE` is reported here — the caller cannot see it,
+    and such a fetch resolves whatever the mutable ref happens to name.
+    """
     # `curl` must be the command being run, not merely a package name in
     # `apk add --no-cache curl xz`.
+    where = FETCHER_WHERE
     curl_cmd = re.compile(r"(?:^|&&|\|\||;|\|)\s*curl(?:\s|$)")
     curl_segments = [
         text
@@ -392,7 +388,7 @@ def _check_verified(fetcher_code: list[str], report: Report) -> None:
             where,
             "no curl download found in the fetcher, so there is nothing to verify",
         )
-        return
+        return None
     for text in curl_segments:
         if not re.search(RELEASE_VAR, text):
             report.fail(
@@ -410,53 +406,91 @@ def _check_verified(fetcher_code: list[str], report: Report) -> None:
             "cannot identify what curl writes, so the download cannot be shown to "
             "be verified",
         )
+        return None
+    return downloaded
+
+
+def _check_exit_status(text: str, sep: str, report: Report) -> None:
+    """The check's result has to be what the shell derives its exit status from.
+
+    Anything that folds the verdict away — a trailing command, a pipe, a
+    trailing `&`, a `||` fallback, or a `!` inversion — lets a mismatch build
+    an image anyway, so each shape gets its own diagnostic.
+    """
+    where = FETCHER_WHERE
+    marker = text.find("sha256sum -c")
+    head, tail = text[:marker], text[marker:]
+    # Everything after the marker decides the exit status.
+    if "|" in _unquoted(tail) or re.search(r"(?<![>&])&\s*$", _unquoted(tail)):
+        report.fail(
+            where,
+            "the `sha256sum -c` status is overwritten (a pipe or `&` after "
+            "it); a failed check must abort the build",
+        )
+    if sep == "||":
+        report.fail(
+            where,
+            "the `sha256sum -c` result is discarded (`|| …`); a failed check "
+            "must abort the build",
+        )
+    if sep == ";":
+        # `sha256sum -c - ; echo done` exits 0 regardless of the check.
+        report.fail(
+            where,
+            "a command after the `sha256sum -c` overwrites its exit status "
+            "(`;`); a failed check must abort the build",
+        )
+    # A leading `!` inverts the verdict, so a mismatch exits 0.
+    if re.search(r"(?:^|\s)!(?=\s|$)", _unquoted(head)):
+        report.fail(
+            where,
+            "the `sha256sum -c` result is inverted (`!`); a failed check must "
+            "abort the build",
+        )
+
+
+def _check_covers_download(text: str, downloaded: set[str], report: Report) -> None:
+    """The check must read the selected pin *and* cover the file curl wrote."""
+    where = FETCHER_WHERE
+    if not re.search(SELECTED_SHA_VAR, text):
+        report.fail(
+            where,
+            "the checksum check does not read the selected `$FFMPEG_SHA256`; "
+            "it verifies something other than the pin",
+        )
+    if not {p for p in downloaded if p in text}:
+        report.fail(
+            where,
+            f"`sha256sum -c` does not check the downloaded tarball "
+            f"({', '.join(sorted(downloaded))}); it is fetched unverified",
+        )
+
+
+def _check_verified(fetcher_code: list[str], report: Report) -> None:
+    """The check must run, read the selected pin, cover the download, and matter."""
+    where = FETCHER_WHERE
+    verifying = [line for line in fetcher_code if "sha256sum -c" in line]
+    if not verifying:
+        report.fail(
+            where,
+            "the download is never verified — no `sha256sum -c` against the pinned hash",
+        )
+        return
+
+    downloaded = _downloads(fetcher_code, report)
+    if downloaded is None:
         return
 
     for line in verifying:
+        # Variable references are matched in the *raw* segment text (the real
+        # Dockerfile quotes them: `-z "$FFMPEG_SHA256"`), while operators are
+        # matched in the unquoted form. Both are scoped to a single command so
+        # a mention elsewhere in the folded RUN cannot vouch for this one.
         for text, sep in _segments(line):
-            marker = text.find("sha256sum -c")
-            if marker < 0:
+            if text.find("sha256sum -c") < 0:
                 continue
-            head, tail = text[:marker], text[marker:]
-            # Everything after the marker decides the exit status.
-            if "|" in _unquoted(tail) or re.search(r"(?<![>&])&\s*$", _unquoted(tail)):
-                report.fail(
-                    where,
-                    "the `sha256sum -c` status is overwritten (a pipe or `&` after "
-                    "it); a failed check must abort the build",
-                )
-            if sep == "||":
-                report.fail(
-                    where,
-                    "the `sha256sum -c` result is discarded (`|| …`); a failed check "
-                    "must abort the build",
-                )
-            if sep == ";":
-                # `sha256sum -c - ; echo done` exits 0 regardless of the check.
-                report.fail(
-                    where,
-                    "a command after the `sha256sum -c` overwrites its exit status "
-                    "(`;`); a failed check must abort the build",
-                )
-            # A leading `!` inverts the verdict, so a mismatch exits 0.
-            if re.search(r"(?:^|\s)!(?=\s|$)", _unquoted(head)):
-                report.fail(
-                    where,
-                    "the `sha256sum -c` result is inverted (`!`); a failed check must "
-                    "abort the build",
-                )
-            if not re.search(SELECTED_SHA_VAR, text):
-                report.fail(
-                    where,
-                    "the checksum check does not read the selected `$FFMPEG_SHA256`; "
-                    "it verifies something other than the pin",
-                )
-            if not {p for p in downloaded if p in text}:
-                report.fail(
-                    where,
-                    f"`sha256sum -c` does not check the downloaded tarball "
-                    f"({', '.join(sorted(downloaded))}); it is fetched unverified",
-                )
+            _check_exit_status(text, sep, report)
+            _check_covers_download(text, downloaded, report)
     if any(re.search(r"\bset\s+\+e\b", line) for line in fetcher_code):
         report.fail(
             where,
@@ -467,7 +501,7 @@ def _check_verified(fetcher_code: list[str], report: Report) -> None:
 
 def _check_empty_guard(fetcher_code: list[str], report: Report) -> None:
     """A missing pin must fail the build, not merely be noticed."""
-    where = "Dockerfile/ffmpeg-fetcher"
+    where = FETCHER_WHERE
     guard = re.compile(r"-z\s+\"?" + SELECTED_SHA_VAR)
     for line in fetcher_code:
         m = guard.search(line)
@@ -502,45 +536,44 @@ def _arg_defaults(lines: list[str]) -> dict[str, str]:
     return defaults
 
 
-def check_dockerfile(path: Path, report: Report) -> None:
-    stages = _split_stages(path.read_text(encoding="utf-8"))
-    fetcher_lines = _stage(stages)
-    final_lines = stages[-1][1] if stages else None
+def _locate_stages(
+    stages: list[tuple[str, list[str]]], report: Report
+) -> tuple[list[str], list[str]] | None:
+    """Resolve the fetcher stage and the final image stage that carries labels.
 
+    Returns None once the Dockerfile is too broken to check further; each
+    missing stage is still reported, so one run names every problem.
+    """
+    fetcher_lines = _stage(stages)
     if fetcher_lines is None:
         report.fail("Dockerfile", f"no build stage named `{FETCHER_MARKER}`")
     # The fetcher is a throwaway stage, so the image that ships must be a
     # *later* one; if the fetcher is last there is nothing to carry labels.
     if not stages or _is_fetcher(stages[-1][0]):
         report.fail("Dockerfile", "no final image stage after the ffmpeg fetcher")
+    final_lines = stages[-1][1] if stages else None
     if fetcher_lines is None or final_lines is None:
-        return
+        return None
+    return fetcher_lines, final_lines
 
-    fetcher = _arg_defaults(fetcher_lines)
-    final = _arg_defaults(final_lines)
 
-    # (1) immutable-ref + (2) hashed, on the values that drive the download.
-    absent = [name for name in ARG_NAMES if name not in fetcher]
-    for name in absent:
-        report.fail("Dockerfile/ffmpeg-fetcher", f"`ARG {name}` is not declared")
-    if absent:
-        return
-
+def _check_immutable_ref(fetcher: dict[str, str], report: Report) -> None:
+    """(1) immutable-ref + (2) hashed, on the values that drive the download."""
+    where = FETCHER_WHERE
     release = fetcher["FFMPEG_RELEASE"]
     if not RELEASE_RE.match(release) or not _is_real_date(release):
         report.fail(
-            "Dockerfile/ffmpeg-fetcher",
+            where,
             f"FFMPEG_RELEASE={release!r} is not a dated autobuild-* tag. "
             "`latest` is a mutable ref whose assets are replaced in place; pin a "
             "build BtbN retains, which for a long-lived image means one of the "
             "month-end tags it keeps for two years.",
         )
-
     for arch in ARCHES:
         asset = fetcher[f"FFMPEG_BUILD_{arch}"]
         if not ASSET_RE.match(asset):
             report.fail(
-                "Dockerfile/ffmpeg-fetcher",
+                where,
                 f"FFMPEG_BUILD_{arch}={asset!r} is not a concrete "
                 "`-g<commit>` tarball name; a `-latest-` segment means the "
                 "asset floats.",
@@ -548,45 +581,43 @@ def check_dockerfile(path: Path, report: Report) -> None:
         digest = fetcher[f"FFMPEG_SHA256_{arch}"]
         if not SHA256_RE.match(digest):
             report.fail(
-                "Dockerfile/ffmpeg-fetcher",
+                where,
                 f"FFMPEG_SHA256_{arch}={digest!r} is not a 64-char lowercase hex "
                 "SHA-256. Every download needs a non-empty expected checksum.",
             )
     if fetcher["FFMPEG_BUILD_AMD64"] == fetcher["FFMPEG_BUILD_ARM64"]:
         report.fail(
-            "Dockerfile/ffmpeg-fetcher",
+            where,
             "both architectures name the same asset, so one of them downloads the "
             "wrong binary",
         )
 
-    # (3) verified: the pin has to actually gate the build, in real code.
-    # Reason over the *unfolded, comment-stripped* command list, because that
-    # is what the shell runs: Docker joins `\` continuations into one command,
-    # and a `#` mid-line comments out the rest of the physical line.
-    fetcher_code = _logical(fetcher_lines)
-    _check_verified(fetcher_code, report)
-    _check_empty_guard(fetcher_code, report)
 
-    # (4) labelled: the final stage must advertise exactly what was verified.
+def _check_final_args(fetcher: dict[str, str], final: dict[str, str], report: Report) -> None:
+    """(4a) the final stage must still hold the values the fetcher verified."""
     for name in ARG_NAMES:
         if name not in final:
             report.fail(
-                "Dockerfile/final",
+                FINAL_WHERE,
                 f"`ARG {name}` is not re-declared, so the labels would lose it "
                 "(ARG values do not cross stage boundaries)",
             )
         elif final[name] != fetcher[name]:
             report.fail(
-                "Dockerfile/final",
+                FINAL_WHERE,
                 f"{name}={final[name]!r} disagrees with the fetcher's "
                 f"{fetcher[name]!r}; the label would not describe the verified binary",
             )
 
-    # Provenance must be real `LABEL` instructions in the final stage — a
-    # `key=value` line inside a `RUN` records nothing, so accepting one would
-    # leave the shipped image with no labels at all. Continuations are unfolded
-    # first, so a multi-key LABEL is one logical line, and comments are
-    # stripped so prose cannot stand in for an instruction.
+
+def _check_labels(final_lines: list[str], report: Report) -> None:
+    """(4b) the provenance must be real LABEL instructions interpolating the pins.
+
+    A `key=value` line inside a `RUN` records nothing, so accepting one would
+    leave the shipped image with no labels at all. Continuations are unfolded
+    first, so a multi-key LABEL is one logical line, and comments are stripped
+    so prose cannot stand in for an instruction.
+    """
     label_text = "\n".join(
         line for line in _logical(final_lines) if re.match(r"^LABEL\b", line.strip(), re.I)
     )
@@ -610,17 +641,45 @@ def check_dockerfile(path: Path, report: Report) -> None:
             continue
         if full in declared:
             report.fail(
-                "Dockerfile/final",
+                FINAL_WHERE,
                 f"`{full}` does not interpolate `${{{arg}}}`. A provenance label "
                 "must record the pinned value at build time, not a literal that "
                 "can drift from what was verified.",
             )
         else:
             report.fail(
-                "Dockerfile/final",
+                FINAL_WHERE,
                 f"missing `LABEL {full}=...${{{arg}}}`. Provenance that cannot "
                 "identify the shipped bytes is not provenance.",
             )
+
+
+def check_dockerfile(path: Path, report: Report) -> None:
+    """Run every Dockerfile check, reporting all failures in one pass."""
+    located = _locate_stages(_split_stages(path.read_text(encoding="utf-8")), report)
+    if located is None:
+        return
+    fetcher_lines, final_lines = located
+    fetcher = _arg_defaults(fetcher_lines)
+    final = _arg_defaults(final_lines)
+
+    absent = [name for name in ARG_NAMES if name not in fetcher]
+    for name in absent:
+        report.fail(FETCHER_WHERE, f"`ARG {name}` is not declared")
+    if absent:
+        return
+
+    _check_immutable_ref(fetcher, report)
+    # (3) verified: the pin has to actually gate the build, in real code.
+    # Reason over the *unfolded, comment-stripped* command list, because that
+    # is what the shell runs: Docker joins `\` continuations into one command,
+    # and a `#` mid-line comments out the rest of the physical line.
+    fetcher_code = _logical(fetcher_lines)
+    _check_verified(fetcher_code, report)
+    _check_empty_guard(fetcher_code, report)
+    # (4) labelled: the final stage must advertise exactly what was verified.
+    _check_final_args(fetcher, final, report)
+    _check_labels(final_lines, report)
 
 
 def check_proxmox_script(path: Path, dockerfile: Path, report: Report) -> None:

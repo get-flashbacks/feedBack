@@ -430,7 +430,9 @@ def test_an_output_flag_inside_a_url_is_not_mistaken_for_one(tmp_path):
     # `split()` would read this as a second download target.
     errors = _synced(tmp_path, url='${FFMPEG_RELEASE}/x?a=1 -o /tmp/evil')
     assert errors == []
-    assert gate._curl_outputs('curl -fsSL "u?a=1 -o /tmp/evil" -o /tmp/real') == {"/tmp/real"}
+    # The expected path is shell text the gate parses, never a real temp file.
+    outputs = gate._curl_outputs('curl -fsSL "u?a=1 -o /tmp/evil" -o /tmp/real')
+    assert outputs == {"/tmp/real"}  # nosec B108
 
 
 def test_a_redirected_download_is_still_recognised(tmp_path):
@@ -494,8 +496,11 @@ def test_an_inline_comment_cannot_hide_the_empty_checksum_guard(tmp_path):
 
 
 def test_a_hash_check_on_an_unrelated_file_is_rejected(tmp_path):
-    # The check has to cover the artifact that was downloaded.
-    dockerfile = _dockerfile().replace("/tmp/ffmpeg.tar.xz\" | sha256sum", "/tmp/other\" | sha256sum")
+    # The check has to cover the artifact that was downloaded. Both paths are
+    # Dockerfile text the gate parses, never real files — B108 does not apply.
+    checked = '/tmp/ffmpeg.tar.xz" | sha256sum'  # nosec B108
+    elsewhere = "/tmp/other\" | sha256sum"  # nosec B108
+    dockerfile = _dockerfile().replace(checked, elsewhere)
     errors = _errors(tmp_path, dockerfile, _proxmox())
     assert [e for e in errors if "unverified" in e], errors
 
