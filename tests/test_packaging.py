@@ -51,19 +51,21 @@ def test_every_starter_source_is_packaged():
         if line.strip() and not line.lstrip().startswith("#")
     ]
     ct_builder = (REPO_ROOT / "build-proxmox-ct.sh").read_text()
-    assert "BUILTIN_STARTER_SOURCES" in ct_builder
-    assert 'cp "${starter_sources[@]}" "${ROOTFS}${APP_DIR}/content/starter/"' in ct_builder
+    if "BUILTIN_STARTER_SOURCES" not in ct_builder:
+        pytest.fail("CT builder does not read the starter source list")
+    if 'cp "${starter_sources[@]}" "${ROOTFS}${APP_DIR}/content/starter/"' not in ct_builder:
+        pytest.fail("CT builder does not copy the listed starter sources")
 
     for _, rel in builtin_content.BUILTIN_STARTER_SOURCES:
-        assert any(fnmatch.fnmatchcase(rel, pattern) for pattern in copy_patterns), rel
+        if not any(fnmatch.fnmatchcase(rel, pattern) for pattern in copy_patterns):
+            pytest.fail(f"Dockerfile does not copy starter source {rel}")
         for path in ("content/", "content/starter/", rel):
             matching = [
                 rule for rule in ignore_rules
                 if fnmatch.fnmatchcase(path, rule.removeprefix("!"))
             ]
-            assert matching and matching[-1].startswith("!"), (
-                f"Docker excludes starter source {rel} at {path}"
-            )
+            if not matching or not matching[-1].startswith("!"):
+                pytest.fail(f"Docker excludes starter source {rel} at {path}")
 
 
 def _server_toplevel_imports():
