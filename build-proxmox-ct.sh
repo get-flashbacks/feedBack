@@ -469,8 +469,16 @@ for d in lib static plugins; do
 done
 
 # The starter seeder reads these packs from APP_DIR/content/starter/.
+mapfile -t starter_sources < <(
+  PYTHONPATH=lib python3 -c 'from builtin_content import BUILTIN_STARTER_SOURCES; print(*(rel for _, rel in BUILTIN_STARTER_SOURCES), sep="\n")'
+)
+[[ ${#starter_sources[@]} -gt 0 ]] || die "No starter packs listed in BUILTIN_STARTER_SOURCES."
+for source in "${starter_sources[@]}"; do
+  [[ -f "$source" ]] || die "Starter pack source missing: $source"
+done
 mkdir -p "${ROOTFS}${APP_DIR}/content/starter"
-cp content/starter/*.feedpak "${ROOTFS}${APP_DIR}/content/starter/"
+cp "${starter_sources[@]}" "${ROOTFS}${APP_DIR}/content/starter/"
+info "  Copied ${#starter_sources[@]} starter pack(s)"
 
 for f in requirements.txt server.py VERSION main.py tailwind.config.js; do
   if [[ -f "$f" ]]; then
