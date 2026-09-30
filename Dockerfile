@@ -272,6 +272,8 @@ COPY VERSION /app/
 # source relative to its own dir, so it must live under /app/docs/diagnostics/.
 # Only the .sloppak artifacts are needed at runtime — not the builder script.
 COPY docs/diagnostics/*.sloppak /app/docs/diagnostics/
+# Starter packs are seeded from this path into DLC_DIR/starter/ on first run.
+COPY content/starter/*.feedpak /app/content/starter/
 
 ENV PYTHONPATH=/app/lib:/app
 

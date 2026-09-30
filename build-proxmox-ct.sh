@@ -468,6 +468,10 @@ for d in lib static plugins; do
   fi
 done
 
+# The starter seeder reads these packs from APP_DIR/content/starter/.
+mkdir -p "${ROOTFS}${APP_DIR}/content/starter"
+cp content/starter/*.feedpak "${ROOTFS}${APP_DIR}/content/starter/"
+
 for f in requirements.txt server.py VERSION main.py tailwind.config.js; do
   if [[ -f "$f" ]]; then
     cp "$f" "${ROOTFS}${APP_DIR}/"
