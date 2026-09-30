@@ -23,7 +23,7 @@
 #   FORCE_REBUILD=1     Delete an existing rootfs without prompting (for CI)
 #
 # Prerequisites (install in WSL):
-#   sudo apt install debootstrap systemd-container tar zstd curl unzip git
+#   sudo apt install debootstrap systemd-container tar zstd curl unzip git python3
 #
 # On Proxmox, after transfer:
 #   pct restore <VMID> feedBack-ct.tar.zst --storage local-lvm --rootfs 8 --unprivileged 1
@@ -187,8 +187,8 @@ if [[ "$TARGETARCH" == "arm64" && "$(uname -m)" != "aarch64" ]]; then
 fi
 
 # Confirm required tools
-for cmd in debootstrap systemd-nspawn curl unzip git tar zstd; do
-  command -v "$cmd" &>/dev/null || die "'$cmd' not found. Run: sudo apt install debootstrap systemd-container curl unzip git tar zstd"
+for cmd in debootstrap systemd-nspawn curl unzip git tar zstd python3; do
+  command -v "$cmd" &>/dev/null || die "'$cmd' not found. Run: sudo apt install debootstrap systemd-container curl unzip git tar zstd python3"
 done
 
 # =============================================================================
@@ -467,6 +467,18 @@ for d in lib static plugins; do
     warn "  Local '${d}/' not found – skipping."
   fi
 done
+
+# The starter seeder reads these packs from APP_DIR/content/starter/.
+starter_source_list=$(PYTHONPATH=lib python3 -c 'from builtin_content import BUILTIN_STARTER_SOURCES; print(*(rel for _, rel in BUILTIN_STARTER_SOURCES), sep="\n")') \
+  || die "Failed to read BUILTIN_STARTER_SOURCES with host python3."
+[[ -n "$starter_source_list" ]] || die "No starter packs listed in BUILTIN_STARTER_SOURCES."
+mapfile -t starter_sources <<< "$starter_source_list"
+for source in "${starter_sources[@]}"; do
+  [[ -f "$source" ]] || die "Starter pack source missing: $source"
+done
+mkdir -p "${ROOTFS}${APP_DIR}/content/starter"
+cp "${starter_sources[@]}" "${ROOTFS}${APP_DIR}/content/starter/"
+info "  Copied ${#starter_sources[@]} starter pack(s)"
 
 for f in requirements.txt server.py VERSION main.py tailwind.config.js; do
   if [[ -f "$f" ]]; then
