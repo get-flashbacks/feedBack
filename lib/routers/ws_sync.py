@@ -82,6 +82,11 @@ CONN_BURST = 32.0
 # above any plausible client population (the cap is keyed on peer addresses,
 # so every NAT/proxy behind the relay can add entries) while keeping the map's
 # worst case a fixed few hundred entries rather than one per address ever seen.
+# Past the ceiling eviction is not free: it discards the evicted address's
+# tokens along with its entry, so an address that is still locked out loses the
+# rest of its lockout when unrelated new addresses push it off the end. Size
+# this above the deployment's real address population, not as low as memory
+# alone would allow.
 MAX_CONN_BUCKETS = 256
 # A peer that stops draining its socket would leave send_text() pending
 # forever — and since publishers await the fan-out gather, one stalled peer
@@ -168,8 +173,14 @@ def _conn_rate_allowed(ip: str) -> bool:
     # Bound the map for a client that rotates source addresses: those entries
     # never idle, so only a ceiling holds the growth. Evicted buckets are the
     # least recently *seen* ones, which under that flood are the oldest
-    # attempts — dropping them costs no enforcement (the flood is what
-    # MAX_CONN_BUCKETS exists to bound).
+    # attempts. Dropping one costs nothing against the flood — such a client is
+    # handed a fresh burst per address either way — but it does throw away that
+    # address's tokens, so once the address population passes the ceiling an
+    # unrelated burst of new addresses can also cut short the lockout of a
+    # legitimate address that stopped reconnecting (see the MAX_CONN_BUCKETS
+    # comment). Skipping locked-out buckets instead would let a flood hold the
+    # ceiling full and lock out every new address, so evicting is the trade
+    # worth making.
     while len(_conn_buckets) > MAX_CONN_BUCKETS:
         evicted, _bucket = _conn_buckets.popitem(last=False)
         log.debug("ws_sync: evicted connection-rate bucket for %s at the %d-entry cap",
