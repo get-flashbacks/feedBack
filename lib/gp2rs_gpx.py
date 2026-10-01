@@ -2220,6 +2220,13 @@ def convert_file(
 _VOCAL_MIDI_PROGRAMS = {52, 53, 54, 85, 86, 87}  # Choir Aahs, Voice Oohs, Synth Voice, Lead Voice
 _VOCAL_NAME_KEYWORDS = {'vocal', 'voice', 'vox', 'sing', 'lyric', 'choir', 'lead voc', 'backing voc'}
 
+# Ties can extend a vocal token's length indefinitely if a fan tab stops
+# transcribing <Lyrics> partway through (later repeats left blank) while the
+# underlying notes still carry tie flags — see convert_vocal_track's tie
+# handling. No genuinely sung syllable runs longer than a few seconds, so cap
+# the extension instead of trusting an unbroken tie chain blindly.
+_VOCAL_TIE_MAX_LENGTH_S = 5.0
+
 
 def _is_vocal_track(track: dict) -> bool:
     """Return True if this track looks like a vocal/lyric part."""
@@ -2357,12 +2364,25 @@ def convert_vocal_track(
                                 if note_el is None:
                                     continue
 
-                                # Tie destination: extend previous vocal's length
+                                # Tie destination: extend previous vocal's length.
+                                # Capped: a tab that stops transcribing lyrics
+                                # partway through (later repeats left blank,
+                                # common in fan tabs) can still carry tie flags
+                                # on the trailing notes of that string for the
+                                # rest of the song, which would otherwise keep
+                                # extending the last real syllable indefinitely
+                                # (observed: a "life" stretched to 104s). No
+                                # genuinely sung syllable runs longer than a
+                                # few seconds, so bound the extension instead
+                                # of trusting an unbroken tie chain blindly.
                                 if _note_is_tie(note_el):
                                     if raw_vocals:
-                                        raw_vocals[-1]['length'] = max(
-                                            raw_vocals[-1]['length'],
-                                            (voice_time + audio_offset + dur) - raw_vocals[-1]['time']
+                                        raw_vocals[-1]['length'] = min(
+                                            _VOCAL_TIE_MAX_LENGTH_S,
+                                            max(
+                                                raw_vocals[-1]['length'],
+                                                (voice_time + audio_offset + dur) - raw_vocals[-1]['time']
+                                            ),
                                         )
                                     # Do NOT advance voice_time here — the
                                     # beat-end `voice_time += dur` below advances
@@ -2394,6 +2414,19 @@ def convert_vocal_track(
                                 })
 
                         voice_time += dur
+
+                    # Only the first active voice in a bar feeds the vocal
+                    # timeline. Some tabs put a second, genuinely-different
+                    # simultaneous lyric line in a bar's second GP voice
+                    # (e.g. an overlapping duet echo) rather than a silent
+                    # alternate-rhythm layer. A single flat lyric timeline
+                    # can't represent two simultaneous phrases — appending
+                    # both voices' beats in voice order (the old behavior)
+                    # produced an out-of-order, overlapping token stream
+                    # instead of two coherent lines. Until there's a
+                    # multi-voice output shape, drop the second+ voice
+                    # rather than corrupt the primary one.
+                    break
 
         current_time += bar_duration
 

@@ -13,6 +13,7 @@ import xml.etree.ElementTree as ET
 import pytest
 
 import gp2rs_gpx
+import safe_xml
 from gp2rs_gpx import convert_file
 
 from gp2rs_gpx import (
@@ -36,6 +37,7 @@ from gp2rs_gpx import (
     _gpif_left_fingering,
     _gpif_pick_direction,
     _gpif_track_capo,
+    convert_vocal_track,
 )
 from gp2rs import RsNote
 
@@ -386,6 +388,73 @@ def test_vocal_pitch_sidecar_emits_lyric_note():
 def test_vocal_pitch_sidecar_skips_beat_without_lyric():
     out = convert_vocal_track_to_pitch_sidecar(**_vocal_sidecar_args(with_lyric=False))
     assert out == {"version": 1, "notes": []}
+
+
+# ── convert_vocal_track: runaway tie-extension cap ──────────────────────────
+# One bar, one voice, four whole-note beats (4.0 qn @ 120 BPM = 2.0 s each):
+# beat0 carries the lyric (tie origin), beats 1-3 are tie destinations with
+# no lyric of their own. Uncapped, three 2.0s tie extensions would stretch
+# the single syllable to 6.0s; _VOCAL_TIE_MAX_LENGTH_S bounds it at 5.0s.
+
+def _tie_chain_args(num_tie_beats: int):
+    def _note(nid: str, *, tie_destination: bool, tie_origin: bool = False):
+        tie_attrs = ''
+        if tie_destination:
+            tie_attrs = '<Tie destination="true"/>'
+        elif tie_origin:
+            tie_attrs = '<Tie origin="true"/>'
+        return safe_xml.safe_fromstring(
+            '<Note>'
+            '<Property name="String"><String>0</String></Property>'
+            '<Property name="Fret"><Fret>0</Fret></Property>'
+            f'{tie_attrs}'
+            '</Note>'
+        )
+
+    beat_ids = [str(i) for i in range(num_tie_beats + 1)]
+    beats_dict = {
+        beat_ids[0]: safe_xml.safe_fromstring(
+            '<Beat><Rhythm ref="rW"/><Lyrics><Line>la</Line></Lyrics><Notes>0</Notes></Beat>'
+        ),
+    }
+    notes_dict = {'0': _note('0', tie_destination=False, tie_origin=True)}
+    for i in range(1, num_tie_beats + 1):
+        beats_dict[beat_ids[i]] = safe_xml.safe_fromstring(
+            f'<Beat><Rhythm ref="rW"/><Notes>{i}</Notes></Beat>'
+        )
+        notes_dict[str(i)] = _note(str(i), tie_destination=True)
+
+    masterbar = safe_xml.safe_fromstring('<MasterBar><Time>4/4</Time><Bars>0</Bars></MasterBar>')
+    return dict(
+        root=safe_xml.safe_fromstring('<GPIF/>'),  # no MasterTrack -> 120 BPM
+        track={'string_pitches': [60]},
+        raw_idx=0,
+        masterbars=[masterbar],
+        bars_by_id={'0': safe_xml.safe_fromstring('<Bar><Voices>0</Voices></Bar>')},
+        voices_dict={'0': safe_xml.safe_fromstring(f'<Voice><Beats>{" ".join(beat_ids)}</Beats></Voice>')},
+        beats_dict=beats_dict,
+        notes_dict=notes_dict,
+        rhythms_dict={'rW': safe_xml.safe_fromstring('<Rhythm><NoteValue>Whole</NoteValue></Rhythm>')},
+    )
+
+
+def _vocal_length(xml_str):
+    root = safe_xml.safe_fromstring(xml_str)
+    vocal = root.find('vocal')
+    assert vocal is not None, xml_str
+    return float(vocal.get('length'))
+
+
+def test_vocal_tie_chain_extends_length_under_cap():
+    # One tie destination: 2.0s origin extended toward 4.0s, still under 5.0s cap.
+    out = convert_vocal_track(**_tie_chain_args(num_tie_beats=1))
+    assert _vocal_length(out) == pytest.approx(4.0)
+
+
+def test_vocal_tie_chain_caps_runaway_extension():
+    # Three tie destinations: uncapped this would reach 8.0s; capped at 5.0s.
+    out = convert_vocal_track(**_tie_chain_args(num_tie_beats=3))
+    assert _vocal_length(out) == pytest.approx(5.0)
 
 
 # ── _collect_tone_events ────────────────────────────────────────────────────
