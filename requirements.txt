@@ -19,7 +19,7 @@ yt-dlp>=2025.1.1
 # remote Demucs / WhisperX servers. Currently transitively pulled by
 # cloudscraper, but declaring it explicitly avoids breakage if that
 # transitive dep ever changes upstream.
-requests>=2.31
+requests>=2.34.2
 
 # Hard dependency of anyio (FastAPI/Starlette's async layer): anyio imports it
 # lazily, so `import anyio` succeeds without it but the server crashes with
