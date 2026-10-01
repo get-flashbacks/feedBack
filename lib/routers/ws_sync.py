@@ -35,12 +35,19 @@ Design points (full spec in the issue):
   layer, every client behind the proxy shares one bucket. Fine for the
   documented direct-LAN deployment; revisit if a supported proxy topology
   needs real client-IP propagation.
+- The state behind that cap is bounded, like the rest of this module (#106). A
+  bucket idle for a full refill window has every token back, so it is
+  indistinguishable from a bucket that was never created and is dropped; a
+  hard ceiling then evicts the least-recently-seen addresses, so an address
+  rotation flood (a client with a large IPv6 prefix) cannot grow the map past
+  `MAX_CONN_BUCKETS`.
 """
 
 import asyncio
 import logging
 import re
 import time
+from collections import OrderedDict
 
 from fastapi import APIRouter, WebSocket
 
@@ -70,6 +77,12 @@ RATE_BURST = 240.0  # token-bucket burst headroom
 # the room itself still has space.
 CONN_RATE_PER_SEC = 5.0
 CONN_BURST = 32.0
+# Hard ceiling on how many source IPs the connection-attempt cap remembers at
+# once; the least-recently-seen entry is dropped once it is reached. Sized well
+# above any plausible client population (the cap is keyed on peer addresses,
+# so every NAT/proxy behind the relay can add entries) while keeping the map's
+# worst case a fixed few hundred entries rather than one per address ever seen.
+MAX_CONN_BUCKETS = 256
 # A peer that stops draining its socket would leave send_text() pending
 # forever — and since publishers await the fan-out gather, one stalled peer
 # would stall every publisher's receive loop behind it. Bounding the send
@@ -88,13 +101,10 @@ _WS_TRY_AGAIN_LATER = 1013  # room or server at capacity
 _rooms: dict[str, dict[WebSocket, asyncio.Lock]] = {}
 
 # source IP → (tokens, last_refill_monotonic) for the connection-attempt cap.
-# Unbounded-growth note: entries are never evicted, so a very large number of
-# distinct source IPs over the server's lifetime would grow this dict — an
-# accepted tradeoff for a LAN-facing relay with a small expected client
-# population, matching this module's existing preference for simple
-# in-memory state (module-level, test/operator overridable) over a bounded
-# cache.
-_conn_buckets: dict[str, tuple[float, float]] = {}
+# Bounded two ways (see `_conn_idle_ttl` and `MAX_CONN_BUCKETS`) rather than
+# growing one entry per address ever seen: `OrderedDict` so recency is
+# explicit, least-recently-seen first.
+_conn_buckets: OrderedDict[str, tuple[float, float]] = OrderedDict()
 
 
 def _client_ip(websocket: WebSocket) -> str:
@@ -102,9 +112,50 @@ def _client_ip(websocket: WebSocket) -> str:
     return client.host if client is not None else "unknown"
 
 
+def _conn_idle_ttl() -> float | None:
+    """Seconds an unused bucket must sit before it is indistinguishable from a
+    missing one.
+
+    A bucket refills at `CONN_RATE_PER_SEC` up to `CONN_BURST`, so once
+    `CONN_BURST / CONN_RATE_PER_SEC` has elapsed it holds a full burst either
+    way — evicting it there hands out nothing that a first-time address
+    wouldn't have received anyway. `None` means no idle interval does that
+    (refilling disabled), in which case nothing may be evicted on idleness
+    alone: dropping the entry would reset the lockout instead of clearing it.
+    """
+    if CONN_RATE_PER_SEC <= 0:
+        return None
+    return CONN_BURST / CONN_RATE_PER_SEC
+
+
+def _prune_conn_buckets(now: float) -> None:
+    """Drop buckets that have refilled to full (and so carry no state)."""
+    ttl = _conn_idle_ttl()
+    if ttl is None:
+        return
+    stale = [ip for ip, (_tokens, last_refill) in _conn_buckets.items()
+             if now - last_refill >= ttl]
+    for ip in stale:
+        del _conn_buckets[ip]
+    if stale:
+        log.debug("ws_sync: evicted %d idle connection-rate bucket(s)", len(stale))
+
+
 def _conn_rate_allowed(ip: str) -> bool:
     now = time.monotonic()
-    tokens, last_refill = _conn_buckets.get(ip, (CONN_BURST, now))
+    entry = _conn_buckets.get(ip)
+    if entry is None:
+        # A new address costs a sweep of the refilled ones, which is the only
+        # growth path for this map — attempts from a known address (the hot
+        # path) touch no more than their own bucket.
+        _prune_conn_buckets(now)
+        tokens, last_refill = CONN_BURST, now
+    else:
+        tokens, last_refill = entry
+        # Recency is what the size ceiling evicts on, so an address that keeps
+        # connecting has to move to the back rather than age out behind a
+        # flood of one-shot ones.
+        _conn_buckets.move_to_end(ip)
     tokens = min(CONN_BURST, tokens + (now - last_refill) * CONN_RATE_PER_SEC)
     # A rejected attempt must not itself consume a token — otherwise a
     # reconnect burst against an already-empty bucket drives tokens further
@@ -114,6 +165,15 @@ def _conn_rate_allowed(ip: str) -> bool:
         _conn_buckets[ip] = (tokens, now)
         return False
     _conn_buckets[ip] = (tokens - 1.0, now)
+    # Bound the map for a client that rotates source addresses: those entries
+    # never idle, so only a ceiling holds the growth. Evicted buckets are the
+    # least recently *seen* ones, which under that flood are the oldest
+    # attempts — dropping them costs no enforcement (the flood is what
+    # MAX_CONN_BUCKETS exists to bound).
+    while len(_conn_buckets) > MAX_CONN_BUCKETS:
+        evicted, _bucket = _conn_buckets.popitem(last=False)
+        log.debug("ws_sync: evicted connection-rate bucket for %s at the %d-entry cap",
+                  evicted, MAX_CONN_BUCKETS)
     return True
 
 
