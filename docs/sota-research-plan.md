@@ -117,10 +117,15 @@ f0_crepe = torchcrepe.predict(
     audio, sr, viterbi=True, return_confidence=False
 )
 
-# Compare outputs — see octave_error_rate() in Phase 3.
+# Compare against a ground-truth F0 trace — not against each other, and not
+# against pYIN. Scoring pYIN against its own output is 0% octave error by
+# construction, and scoring CREPE against pYIN measures disagreement with
+# pYIN, not accuracy against truth. The Success Criteria gate is defined
+# against MIR-1K's note-level F0 (see the dataset table in Phase 3).
 # Frame grids must be resampled to a common hop before comparing.
-print(f"pYIN octave errors: {octave_error_rate(f0_pyin, f0_pyin_ref)}")
-print(f"CREPE octave errors: {octave_error_rate(f0_crepe, f0_pyin_ref)}")
+f0_ground_truth = ...  # MIR-1K reference F0 in Hz, on this hop
+print(f"pYIN octave errors: {octave_error_rate(f0_pyin, f0_ground_truth)}")
+print(f"CREPE octave errors: {octave_error_rate(f0_crepe, f0_ground_truth)}")
 ```
 
 **Qualitative notes:**
@@ -175,8 +180,17 @@ def octave_error_rate(predicted, ground_truth, threshold_cents=50):
     absolute-error implementation cannot detect the downward octave at all:
     with `errors >= 0`, the `|errors + 1200| < threshold` branch is never
     true, which understates the rate by up to 2x on octave-flipped material.
+
+    Both inputs are F0 in Hz, so the difference is taken in cents. An octave
+    is a factor of 2, not an offset of 1200, so a raw Hz difference tested
+    against ±1200 is never near the threshold and the metric reports ~0% no
+    matter how octave-flipped the material is. Frames with a non-finite or
+    non-positive F0 on either side have no comparable pitch and are excluded
+    from the denominator.
     """
-    errors = np.asarray(predicted, dtype=float) - np.asarray(ground_truth, dtype=float)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        errors = 1200 * np.log2(np.asarray(predicted, dtype=float)
+                                / np.asarray(ground_truth, dtype=float))
     finite = np.isfinite(errors)
     if not finite.any():
         return float('nan')
@@ -207,7 +221,15 @@ def raw_pitch_accuracy(predicted, predicted_voiced, ground_truth, ground_truth_v
     both_voiced = np.asarray(predicted_voiced, dtype=bool) & np.asarray(ground_truth_voiced, dtype=bool)
     if not both_voiced.any():
         return float('nan')
-    errors = np.abs(p[both_voiced] - g[both_voiced])
+    # The difference is taken in cents for the same reason as in
+    # octave_error_rate: 50 cents is 0.3 Hz, so a raw Hz difference tested
+    # against a 50-cent threshold is true for essentially every frame and
+    # saturates this metric near 100% for any engine. A frame whose F0 is
+    # non-finite or non-positive on either side counts as an error rather than
+    # dropping out of the denominator, which would move the ratio with the
+    # engine's output validity.
+    with np.errstate(divide='ignore', invalid='ignore'):
+        errors = np.abs(1200 * np.log2(p[both_voiced] / g[both_voiced]))
     return np.mean(errors < threshold_cents) * 100
 ```
 
@@ -249,6 +271,11 @@ _QUALITY_ALIASES = {
 }
 
 
+def _root_name(m):
+    """`C#` -> `C♯`, `Bb` -> `B♭`, from a `_ROOT` match."""
+    return m.group(1) + m.group(2).replace('#', '♯').replace('b', '♭')
+
+
 def normalize_chord(symbol):
     """Reduce a chord label to a comparable (root, quality, bass) tuple.
 
@@ -259,20 +286,25 @@ def normalize_chord(symbol):
     """
     if symbol is None:
         return None
-    m = _ROOT.match(str(symbol).strip())
+    text = str(symbol).strip()
+    m = _ROOT.match(text)
     if not m:
-        return ('?', str(symbol).strip().lower())
-    root = m.group(1) + m.group(2).replace('#', '♯').replace('b', '♭')
-    rest = str(symbol).strip()[m.end():]
+        return ('?', text.lower())
+    rest = text[m.end():]
     bass = None
     if '/' in rest:
         rest, _, bass_part = rest.partition('/')
-        bass = _ROOT.match(bass_part).group(1) if _ROOT.match(bass_part) else bass_part
+        # The bass of a slash chord goes through the same root normalization as
+        # the root. Keeping only the letter turns `C/C#` into `C/C` — two
+        # different chords comparing equal — and neither would match a bass
+        # written `C♯` on the other side of the comparison.
+        bass_match = _ROOT.match(bass_part)
+        bass = _root_name(bass_match) if bass_match else bass_part
     quality = _QUALITY_ALIASES.get(rest, rest or 'maj')
-    return (root, quality, bass)
+    return (_root_name(m), quality, bass)
 
 
-def chord_accuracy(predicted_chords, ground_truth_chords, frame_rate=10):
+def chord_accuracy(predicted_chords, ground_truth_chords):
     """% of frames whose normalized chord matches ground truth.
 
     Both label streams must be resampled to the same frame grid first;
@@ -354,8 +386,6 @@ def engagement_retention(player_sessions_algorithm_a, player_sessions_algorithm_
             return float('nan')
         return sum(1 for s in sessions if s.completed_songs >= 3) / len(sessions)
 
-    complete_a = sum(1 for s in player_sessions_algorithm_a if s.completed_songs >= 3)
-    complete_b = sum(1 for s in player_sessions_algorithm_b if s.completed_songs >= 3)
     rate_a, rate_b = rate(player_sessions_algorithm_a), rate(player_sessions_algorithm_b)
     # The `#13` version divided by complete_a, which raises ZeroDivisionError
     # on a zero-completion arm instead of reporting the result.
@@ -562,3 +592,13 @@ Every difference from the `#13` issue body, and why:
     `REQUEST STAKEHOLDER INPUT`. Aligned.
 14. **A "Scope notes" section was added**, because the body's benchmark and PoC instructions assume
     every candidate tool is a dependency of this repository, and several no longer are.
+15. **Both pitch metrics compared Hz differences against cent thresholds.** `octave_error_rate`
+    tested a raw `predicted - ground_truth` F0 difference against `±1200` cents, and
+    `raw_pitch_accuracy` tested a raw difference against `50` cents. An octave is a factor of 2,
+    not an offset of 1200, and 50 cents is 0.3 Hz, so the first never fired and the second
+    saturated near 100% for any engine. Both now take the difference in cents
+    (`1200 * log2(p / g)`).
+16. **Phase 2 compared each engine against the other.** The snippet scored pYIN against its own
+    output — 0% octave error by construction — and CREPE against pYIN, which measures
+    disagreement rather than accuracy. The example now scores both against a ground-truth F0
+    trace, matching how the Success Criteria table gates on MIR-1K.
