@@ -7,7 +7,9 @@ to pin that the route is actually mounted there.
 Covers the feedBack#1030 acceptance list: bidirectional fan-out, late join,
 sender never echoed, room garbage collection, and the limit closes (invalid
 session id, binary frames, frame size, room size, room count, rate cap) —
-including that one client tripping a limit doesn't disturb the others.
+including that one client tripping a limit doesn't disturb the others. Also
+the bound on the per-IP connection-cap state (#106): buckets that have refilled
+to full are evicted, and the map stays under its ceiling.
 """
 
 from __future__ import annotations
@@ -194,6 +196,103 @@ def test_connection_rate_cap_does_not_penalize_a_reconnecting_room(client, monke
          client.websocket_connect("/ws/sync/ROOM12") as c:
         b.send_text("reconnected")
         assert c.receive_text() == "reconnected"
+
+
+# ── Bounding the per-IP connection-cap state (#106) ──────────────────────────
+
+class _FakeClock:
+    """Stand-in for the `time` module so bucket eviction can be observed
+    without sleeping; `ws_sync` only ever reads `time.monotonic()`."""
+
+    def __init__(self, now=1000.0):
+        self.now = now
+
+    def monotonic(self):
+        return self.now
+
+    def advance(self, seconds):
+        self.now += seconds
+
+
+def test_idle_bucket_is_evicted_only_once_it_has_refilled(monkeypatch):
+    monkeypatch.setattr(ws_sync, "CONN_BURST", 2.0)
+    monkeypatch.setattr(ws_sync, "CONN_RATE_PER_SEC", 1.0)
+    clock = _FakeClock()
+    monkeypatch.setattr(ws_sync, "time", clock)
+
+    ip = "10.0.0.9"
+    assert ws_sync._conn_rate_allowed(ip)
+    assert ws_sync._conn_rate_allowed(ip)
+    assert not ws_sync._conn_rate_allowed(ip)  # bucket now empty
+    assert ip in ws_sync._conn_buckets
+
+    # A tenth of a second short of a full refill, the bucket is still worth
+    # keeping: forgetting it now would hand out the token it is owed rather
+    # than earned.
+    clock.advance(0.9)
+    assert not ws_sync._conn_rate_allowed(ip)
+    assert ip in ws_sync._conn_buckets
+
+    # A full refill window after that last attempt it holds a full burst
+    # either way, so the entry is indistinguishable from one that was never
+    # created — the next new address sweeps it away.
+    clock.advance(2.0)
+    assert ws_sync._conn_rate_allowed("10.0.0.10")
+    assert ip not in ws_sync._conn_buckets
+
+
+def test_idle_bucket_is_kept_while_refilling_is_disabled(monkeypatch):
+    # With refilling disabled nothing restores tokens, so an idleness-based
+    # eviction would reset a lockout rather than clear it.
+    monkeypatch.setattr(ws_sync, "CONN_RATE_PER_SEC", 0.0)
+    clock = _FakeClock()
+    monkeypatch.setattr(ws_sync, "time", clock)
+
+    assert ws_sync._conn_rate_allowed("10.0.0.1")
+    clock.advance(86_400.0)
+    assert ws_sync._conn_rate_allowed("10.0.0.2")
+    assert "10.0.0.1" in ws_sync._conn_buckets
+
+
+def test_conn_bucket_map_stays_under_its_ceiling(monkeypatch):
+    monkeypatch.setattr(ws_sync, "MAX_CONN_BUCKETS", 8)
+    # More distinct source addresses than the cap allows, none of which ever
+    # idles — the case idleness-based eviction alone cannot bound.
+    for i in range(500):
+        assert ws_sync._conn_rate_allowed(f"2001:db8::{i:x}")
+    assert len(ws_sync._conn_buckets) == 8
+
+
+def test_conn_bucket_cap_evicts_the_least_recently_seen_address(monkeypatch):
+    monkeypatch.setattr(ws_sync, "MAX_CONN_BUCKETS", 2)
+    assert ws_sync._conn_rate_allowed("10.0.0.1")
+    assert ws_sync._conn_rate_allowed("10.0.0.2")
+    # Reconnecting pushes 10.0.0.1 to the back, leaving 10.0.0.2 as the least
+    # recently *seen* address even though it was inserted second.
+    assert ws_sync._conn_rate_allowed("10.0.0.1")
+    assert ws_sync._conn_rate_allowed("10.0.0.3")
+    assert "10.0.0.1" in ws_sync._conn_buckets
+    assert "10.0.0.2" not in ws_sync._conn_buckets
+    assert "10.0.0.3" in ws_sync._conn_buckets
+
+
+def test_attempt_from_a_known_address_does_not_sweep(monkeypatch):
+    # The sweep belongs to the new-address path alone: running it on every
+    # attempt would make each connection cost a scan of the whole map on the
+    # event loop thread.
+    monkeypatch.setattr(ws_sync, "CONN_BURST", 2.0)
+    monkeypatch.setattr(ws_sync, "CONN_RATE_PER_SEC", 1.0)
+    clock = _FakeClock()
+    monkeypatch.setattr(ws_sync, "time", clock)
+
+    assert ws_sync._conn_rate_allowed("10.0.0.1")
+    assert ws_sync._conn_rate_allowed("10.0.0.2")
+    clock.advance(2.0)
+    assert ws_sync._conn_rate_allowed("10.0.0.2")
+    assert "10.0.0.1" in ws_sync._conn_buckets
+    # The next new address is what sweeps it.
+    assert ws_sync._conn_rate_allowed("10.0.0.3")
+    assert "10.0.0.1" not in ws_sync._conn_buckets
 
 
 class _StalledPeer:
