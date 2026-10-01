@@ -5,4 +5,4 @@ httpx>=0.27.0
 # soundfile-backed tests are silently skipped via pytest.importorskip
 # and CI doesn't exercise the gate at all.
 numpy>=2.5.3
-soundfile>=0.12
+soundfile>=0.14.0
