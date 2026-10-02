@@ -100,6 +100,12 @@ The player-identity slice (#82) promotes `player-identity` as an active, core-ow
 
 `player-difficulty.v1` is the narrow command plane for applying one player's difficulty to one current highway. The Host validates the full context and target range; stale, incomplete, or vocal requests cannot fall through to a global setter. There is no compatibility shim because player-scoped identity did not previously exist. Older single-player Hosts continue through Difficulty Ladder's existing feature-detected compatibility adapter.
 
+## Practice Difficulty Slice
+
+The practice-difficulty slice (#136) promotes `practice-difficulty` as an active, core-owned provider-coordinator. It owns one time-scoped difficulty override per player context — `register-participant` / `unregister-participant` / `activate` / `clear` / `inspect`, with `override-activated` / `override-cleared` / `override-rejected` events — installed on that context's privately bound highway. Registrant identity comes from the dispatch caller, conflicts are incumbent-wins and never stack, `difficulty_pct` clamps to 0–100, and the window is half-open `[start_time, end_time)`.
+
+It is deliberately **not** a second difficulty slider: `player-difficulty.v1` owns the song-wide mastery value and this domain never rewrites it. The synchronous `highway.setDifficultyOverride` hook makes the override section-scoped by resolving each phrase's level from `_effectiveMasteryAt(p.start_time)` instead of the slider, while `getMastery()` keeps reporting the song-wide value so an adaptive consumer cannot mistake an override for a slider move. State is released on clear, unregister, song replacement, and context replacement/departure. No compatibility shim is needed — no earlier override surface exists, and a consumer's request against an older Host simply degrades to a non-`handled` outcome.
+
 ## Deferred Domains
 
 These domains are planned but should stay out of the runtime graph until a host workflow exists:

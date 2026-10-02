@@ -131,6 +131,7 @@
         'chart-transform': Object.freeze({ lifecycle: 'active', label: 'Active contract', tone: 'clean', summary: 'Coordinates chart-transform providers: pre-render/pre-scoring chart substitution applied after difficulty filtering, with persisted selection, refresh, and fixed-reason failure attribution (#952).' }),
         'player-identity': Object.freeze({ lifecycle: 'active', label: 'Active contract', tone: 'clean', summary: 'Provides stable local session/player identity, profile readiness, lifecycle events, and private highway bindings for concurrent players.' }),
         'player-difficulty.v1': Object.freeze({ lifecycle: 'active', label: 'Active contract', tone: 'clean', summary: 'Routes a context-scoped difficulty request to exactly one current player highway.' }),
+        'practice-difficulty': Object.freeze({ lifecycle: 'active', label: 'Active contract', tone: 'clean', summary: 'Owns one time-scoped difficulty override per player context, applied per highway without rewriting the song-wide mastery value (#136).' }),
     });
     const EXPECTED_COMPATIBILITY_SHIMS = Object.freeze({});
 
