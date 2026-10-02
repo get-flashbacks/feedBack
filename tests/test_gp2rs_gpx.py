@@ -1356,9 +1356,6 @@ def test_auto_select_gpx_fretted_track_named_keys_is_still_classified_as_keys():
 def test_convert_vocal_track_keeps_lyrics_when_first_voice_is_silent():
     """A silent first voice must not hide the lyric-bearing second voice in
     the same bar (feedBack#103)."""
-    from gp2rs_gpx import convert_vocal_track
-    from safe_xml import safe_fromstring
-
     mb = safe_fromstring('<MasterBar><Time>4/4</Time><Bars>0</Bars></MasterBar>')
     bars = {'0': safe_fromstring('<Bar><Voices>0 1</Voices></Bar>')}
     voices = {
