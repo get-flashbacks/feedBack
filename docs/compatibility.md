@@ -25,7 +25,7 @@ repository:
 | `6c11039` | 2026-06-16 | `0.2.9` (file created) |
 | `8f800e0` | 2026-06-20 | `0.3.0` |
 | `803bd0c` | 2026-07-03 | `0.3.0-alpha.1` |
-| `ec1157a` | 2026-08-09 | `0.3.0-alpha.2` (still current) |
+| `ec1157a` | 2026-08-10 | `0.3.0-alpha.2` (still current) |
 
 `0.3.0-alpha.1` therefore covers the range `803bd0c..ec1157a^` (278 commits)
 and `0.3.0-alpha.2` covers `ec1157a..d1980ff` (83 commits as of this audit), so
@@ -138,12 +138,19 @@ LAN-sharing and coordinated-render paths need rows 4 and 5).
 - Visual Export also needs Splitscreen's `beginOfflineRender()` /
   `renderFrameAt()` / `endOfflineRender()` bridge for split-layout export. That
   bridge is a **Splitscreen** revision, not a core one — cite Splitscreen
-  1.14.8 (commits `87e3622a` and `2301dd5`) — and it is all-or-nothing:
-  `renderFrameAt` returns `false` unless offline rendering is active, so a host
-  with `renderFrameAt` but no `beginOfflineRender` can never paint a frame.
-- **Splitscreen — optional.** Panel highways feature-detect the three methods;
-  when they are absent the coordinated-frame path warns once and the
-  self-scheduled per-panel loop continues to work.
+  1.14.8 (commit `2301dd5`, on Splitscreen's default branch) — and it is
+  all-or-nothing: `renderFrameAt` returns `false` unless offline rendering is
+  active, so a host with `renderFrameAt` but no `beginOfflineRender` can never
+  paint a frame. (`87e3622a`, which Visual Export's own error text also cites,
+  is a side-branch commit that diverged from Splitscreen's default branch and
+  is not reachable from it; do not use it as a floor.)
+- **Splitscreen — optional.** Panel highways feature-detect the frame API
+  (`_canDriveFrames` requires `setExternalFrameDriver` and `renderFrame`;
+  `renderFrameAt` is checked separately). When it is absent the
+  coordinated-frame path degrades **silently**: incapable panels keep their own
+  rAF loop and nothing is logged. The `coordinated-frames` warn-once fires only
+  from `beginOfflineRender()`, i.e. when an exporter such as Visual Export asks
+  for an offline split frame.
 - What this commit does *not* introduce: `getSongInfo()` and `getSections()`,
   which Visual Export also calls, are long-standing `static/highway.js` APIs.
 
@@ -153,8 +160,11 @@ LAN-sharing and coordinated-render paths need rows 4 and 5).
   (`fb.playerContexts`).
 - **Optional in every consumer.** Splitscreen reads
   `window.feedBack && window.feedBack.playerContexts` behind a guard and warns
-  that panels stay anonymous; Difficulty Ladder gates its per-player writes on
-  the same check. Declaring a capability the host does not own is not a load
+  that panels stay anonymous. Difficulty Ladder gates its per-player write on
+  `fb.capabilities.dispatch` instead, accepts only a literal `true` result, and
+  otherwise falls back to the context-owned highway and then to single-player
+  `window.setMastery`; `playerContexts` only gates its main-context resolution.
+  Declaring a capability the host does not own is not a load
   error — the loader validates a declaration's shape, not whether the host
   implements the domain.
 - What is lost without it: per-player difficulty routing reaches only the main
@@ -225,8 +235,10 @@ Given a host checkout and a row's commit:
 git merge-base --is-ancestor <commit> HEAD && echo present || echo absent
 
 # Quickest confirmation for a running install, per row:
-#   1  python -c "from dlc_paths import _resolve_dlc_path"
-#   2  python -c "from sloppak import read_member_bytes"
+#   1  PYTHONPATH=lib python -c "from dlc_paths import _resolve_dlc_path"
+#   2  PYTHONPATH=lib python -c "from sloppak import read_member_bytes"
+#      (run from the repo root; without PYTHONPATH=lib, lib/ is not on sys.path
+#      outside pytest and a capable build reads as absent)
 #   3  browser console: window.feedBack.chartTransformDomain?.version === 1
 #   4  the /ws/sync/{id} socket accepts a connection
 #   5  browser console: typeof window.highway.renderFrameAt
