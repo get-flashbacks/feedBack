@@ -600,7 +600,10 @@ await api.dispatch({ capability: 'practice-difficulty', command: 'activate',
   },
 });
 
-// On exit — including on teardown, so the next song is never stuck slowed down.
+// On leaving practice mode, and again on teardown, so the next song is never
+// stuck slowed down. There is no core practice-mode hook to hang this on — the
+// Host cannot see when *your* practice surface ends — so this call is the exit
+// signal (see the rules below).
 // Omit player_context deliberately: it releases every override you own, which
 // is what you want here, because a snapshot captured earlier may already be
 // stale (an arrangement switch or a new song changes its key).
@@ -623,6 +626,7 @@ Rules worth knowing before you build on this:
 - **One override per highway too.** A highway holds a single override slot, so if two different contexts ever resolve to the same panel the second registrant is refused rather than silently overwriting the first.
 - **`clear` with no context releases everything you own.** Supplying a context only narrows the release to that slot — and a stale one answers `no-target` instead of pretending it cleared something.
 - **You never have to release on song change.** Core drops the override on song replacement, on context replacement/departure, and re-installs it if a panel's highway is rebuilt mid-song. Clearing on teardown is still correct: it is the only path that also covers your plugin's screen being torn down mid-session, since the Host does not notify a disabled plugin.
+- **Leaving practice mode is your `clear` call.** #136 lists "practice-mode exit" among the lifecycle conditions, and this domain deliberately implements it as the *registrant's* `clear` rather than as a Host subscription. Core has no consumer-agnostic practice lifecycle to observe, and the one core feature that toggles a practice mode (Section Practice's loop checkbox) owns its own A/B loop rather than the difficulty slot — treating that toggle as "practice mode exited" would clear overrides belonging to other registrants. So dispatch `clear` from the path that ends your practice session and from teardown; `unregister-participant` is the stronger form if your plugin is done with the domain entirely.
 - **`getMastery()` does not move.** It keeps reporting the song-wide slider. Read `highway.getEffectiveMastery(time)` for the value in force at a moment, and `highway.getDifficultyOverride()` (or `bundle.difficultyOverride` in a renderer) for the active window.
 - **Nothing renders differently without phrase data.** An override only changes which level a phrase plays; a chart with a single difficulty level has nothing to switch between, so the window has no visible effect (`highway.hasPhraseData()` is `false`).
 
