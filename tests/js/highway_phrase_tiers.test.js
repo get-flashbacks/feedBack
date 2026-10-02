@@ -81,5 +81,9 @@ test('phraseTopDifficulty reports the tier the phrase is complete at', () => {
 
 test('the mastery filter selects levels through the tier helper', () => {
     const fn = extractFunction(src, '_rebuildMasteryFilter');
-    assert.match(fn, /phraseLevelIndexForMastery\(p\.levels, p\.max_difficulty, hwState\._mastery\)/);
+    // The fraction is resolved per phrase via _effectiveMasteryAt(p.start_time),
+    // not read straight off hwState._mastery — that is what makes a
+    // time-scoped practice override (feedBack#136) affect only the phrases
+    // inside its window.
+    assert.match(fn, /phraseLevelIndexForMastery\(p\.levels, p\.max_difficulty, _effectiveMasteryAt\(p\.start_time\)\)/);
 });

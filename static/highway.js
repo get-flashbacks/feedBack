@@ -313,6 +313,19 @@ function createHighway() {
     // state) so multiple createHighway() instances stay truly
     // per-instance — no shared localStorage key to race on.
     hwState._mastery = 1;
+    // Time-scoped practice override (feedBack#136): { startTime, endTime,
+    // fraction } or null. Never merged into _mastery — getMastery() keeps
+    // reporting the song-wide slider so the Difficulty Ladder adaptive
+    // controller stays consistent; only _rebuildMasteryFilter() consults
+    // the override, and only for phrases that start inside its window.
+    //
+    // _overrideView is the object the render bundle hands out. The bundle
+    // is documented as mutated-in-place with no per-frame allocation, so
+    // this is updated by _setOverrideState() rather than re-spread every
+    // frame; its identity only changes when the override goes absent.
+    hwState._difficultyOverride = null;
+    const _overrideView = { startTime: 0, endTime: 0, fraction: 0 };
+    let _overrideViewActive = false;
     hwState._filteredNotes = null;
     hwState._filteredChords = null;
     hwState._filteredAnchors = null;
@@ -649,6 +662,12 @@ function createHighway() {
         // Master-difficulty (feedBack#48)
         b.mastery = hwState._mastery;
         b.hasPhraseData = _hasRealLadder();
+        // Live summary of an active practice override (feedBack#136), so a
+        // renderer never has to guess why `mastery` above disagrees with
+        // the notes it is being handed. null when no override is active.
+        // A reused view object (see _setOverrideState) — never a per-frame
+        // allocation, so a renderer may safely hold the reference.
+        b.difficultyOverride = _overrideViewActive ? _overrideView : null;
         // When phrase data authored ANY handshape, respect the filtered
         // list strictly (even when this difficulty leaves it empty) —
         // otherwise low-mastery levels would surface arp hints that
@@ -1577,10 +1596,41 @@ function createHighway() {
         ));
     }
 
+    // Single writer for the override so the state, the bundle view and
+    // the filter rebuild cannot drift apart. Every reset path
+    // (song replacement, reconnect, explicit clear) goes through here.
+    function _setOverrideState(next) {
+        hwState._difficultyOverride = next;
+        if (next) {
+            _overrideView.startTime = next.startTime;
+            _overrideView.endTime = next.endTime;
+            _overrideView.fraction = next.fraction;
+            _overrideViewActive = true;
+        } else {
+            _overrideViewActive = false;
+        }
+    }
+
+    // Effective difficulty fraction at a chart time (feedBack#136). The
+    // practice override wins inside its half-open window [startTime,
+    // endTime); everywhere else (and for every non-finite time — the
+    // render loop's pre-song frame, a caller passing nothing) the
+    // song-wide slider value applies. Deliberately does NOT touch
+    // hwState._mastery: the slider and the Difficulty Ladder adaptive
+    // controller must keep seeing the song-wide value.
+    function _effectiveMasteryAt(time) {
+        const override = hwState._difficultyOverride;
+        if (!override) return hwState._mastery;
+        if (!Number.isFinite(time)) return hwState._mastery;
+        if (time < override.startTime || time >= override.endTime) return hwState._mastery;
+        return override.fraction;
+    }
+
     // Rebuild the mastery-filtered note/chord arrays from _phrases +
-    // _mastery. Called on `ready` and on every setMastery(). When
-    // _phrases is null (slider-disabled source), we clear the filtered
-    // arrays — drawNotes/drawChords fall through to the flat arrays.
+    // _mastery. Called on `ready`, on every setMastery(), and on every
+    // setDifficultyOverride(). When _phrases is null (slider-disabled
+    // source), we clear the filtered arrays — drawNotes/drawChords fall
+    // through to the flat arrays.
     //
     // Output arrays are pre-sorted by time because phrase iterations
     // arrive in chronological order and within each level the notes/
@@ -1616,8 +1666,11 @@ function createHighway() {
             const n = p.levels.length;
             if (n === 0) continue;
             // Map slider fraction to a level via the phrase's tier scale
-            // (see phraseLevelIndexForMastery).
-            const lv = p.levels[phraseLevelIndexForMastery(p.levels, p.max_difficulty, hwState._mastery)];
+            // (see phraseLevelIndexForMastery). A phrase picks its level
+            // from the effective difficulty at its own start time, which
+            // is what makes a practice override section-scoped rather
+            // than song-wide (feedBack#136).
+            const lv = p.levels[phraseLevelIndexForMastery(p.levels, p.max_difficulty, _effectiveMasteryAt(p.start_time))];
             for (const x of lv.notes)   outNotes.push(x);
             for (const x of lv.chords)  outChords.push(x);
             // Anchors drive the fret zoom / pan. Keeping max-mastery
@@ -1790,8 +1843,12 @@ function createHighway() {
             // persists across arrangement switches — the slider's
             // position stays put. Filter rebuilds on the next `ready`
             // once the new arrangement's phrases arrive (or stays
-            // disabled if the new source has no phrase data).
+            // disabled if the new source has no phrase data). A
+            // practice override is song-scoped, so it does NOT persist:
+            // the section it referred to belongs to the chart that is
+            // being left (feedBack#136).
             hwState._phrases = null;
+            _setOverrideState(null);
             hwState._filteredNotes = null;
             hwState._filteredChords = null;
             hwState._filteredAnchors = null;
@@ -1941,6 +1998,47 @@ function createHighway() {
             _rebuildMasteryFilter();
         },
         getMastery() { return hwState._mastery; },
+        // Practice difficulty override (feedBack#136). Per-instance,
+        // like _mastery, but time-scoped and never merged into the
+        // song-wide value: getMastery() keeps reporting the slider.
+        //
+        // `override` is `{ startTime, endTime, fraction }` (fractions,
+        // not percentages) or null to clear. Validation is deliberately
+        // forgiving-then-ignoring like setMastery: a caller that passes
+        // garbage keeps the previous override rather than having the
+        // chart blanked. Callers that need the request rejected should
+        // validate first — the practice-difficulty capability domain does.
+        setDifficultyOverride(override) {
+            if (override == null) {
+                if (!hwState._difficultyOverride) return;
+                _setOverrideState(null);
+                _rebuildMasteryFilter();
+                return;
+            }
+            if (typeof override !== 'object') return;
+            const startTime = Number(override.startTime);
+            const endTime = Number(override.endTime);
+            const fraction = Number(override.fraction);
+            if (!Number.isFinite(startTime) || !Number.isFinite(endTime)) return;
+            if (!Number.isFinite(fraction)) return;
+            // Half-open window — a zero-length or inverted range would
+            // never match a phrase start and would silently do nothing.
+            if (endTime <= startTime) return;
+            _setOverrideState({
+                startTime,
+                endTime,
+                fraction: Math.max(0, Math.min(1, fraction)),
+            });
+            _rebuildMasteryFilter();
+        },
+        getDifficultyOverride() {
+            return hwState._difficultyOverride ? { ...hwState._difficultyOverride } : null;
+        },
+        // Effective difficulty at a chart time, or at the current
+        // playback time when `time` is omitted. Always a 0..1 fraction.
+        getEffectiveMastery(time) {
+            return _effectiveMasteryAt(time === undefined ? hwState.chartTime : time);
+        },
         // Single source of truth shared with the ready-bundle field above
         // (see _hasRealLadder) — true only when some phrase actually has
         // more than one level, not merely when phrase timing exists.
@@ -2928,8 +3026,11 @@ function createHighway() {
             // persists across arrangement switches — the slider's
             // position stays put. Filter rebuilds on the next `ready`
             // once the new arrangement's phrases arrive (or stays
-            // disabled if the new source has no phrase data).
+            // disabled if the new source has no phrase data). A
+            // practice override is song-scoped, so it does NOT persist
+            // (feedBack#136).
             hwState._phrases = null;
+            _setOverrideState(null);
             hwState._filteredNotes = null;
             hwState._filteredChords = null;
             hwState._filteredAnchors = null;
