@@ -13,7 +13,8 @@ import xml.etree.ElementTree as ET
 import pytest
 
 import gp2rs_gpx
-from gp2rs_gpx import convert_file
+from gp2rs_gpx import convert_file, convert_vocal_track
+from safe_xml import safe_fromstring
 
 from gp2rs_gpx import (
     _decompress_bcfz,
@@ -1356,25 +1357,26 @@ def test_convert_vocal_track_keeps_lyrics_when_first_voice_is_silent():
     """A silent first voice must not hide the lyric-bearing second voice in
     the same bar (feedBack#103)."""
     from gp2rs_gpx import convert_vocal_track
+    from safe_xml import safe_fromstring
 
-    mb = ET.fromstring('<MasterBar><Time>4/4</Time><Bars>0</Bars></MasterBar>')
-    bars = {'0': ET.fromstring('<Bar><Voices>0 1</Voices></Bar>')}
+    mb = safe_fromstring('<MasterBar><Time>4/4</Time><Bars>0</Bars></MasterBar>')
+    bars = {'0': safe_fromstring('<Bar><Voices>0 1</Voices></Bar>')}
     voices = {
-        '0': ET.fromstring('<Voice><Beats>0</Beats></Voice>'),
-        '1': ET.fromstring('<Voice><Beats>1</Beats></Voice>'),
+        '0': safe_fromstring('<Voice><Beats>0</Beats></Voice>'),
+        '1': safe_fromstring('<Voice><Beats>1</Beats></Voice>'),
     }
     beats = {
-        '0': ET.fromstring('<Beat><Rhythm ref="0"/></Beat>'),
-        '1': ET.fromstring(
+        '0': safe_fromstring('<Beat><Rhythm ref="0"/></Beat>'),
+        '1': safe_fromstring(
             '<Beat><Rhythm ref="0"/><Lyrics><Line>hello</Line></Lyrics>'
             '<Notes>0</Notes></Beat>'),
     }
-    notes = {'0': ET.fromstring(
+    notes = {'0': safe_fromstring(
         '<Note><Properties><Property name="String"><String>0</String></Property>'
         '<Property name="Fret"><Fret>5</Fret></Property></Properties></Note>')}
-    rhythms = {'0': ET.fromstring('<Rhythm><NoteValue>Quarter</NoteValue></Rhythm>')}
+    rhythms = {'0': safe_fromstring('<Rhythm><NoteValue>Quarter</NoteValue></Rhythm>')}
     out = convert_vocal_track(
-        ET.fromstring('<GPIF><MasterBars/></GPIF>'),
+        safe_fromstring('<GPIF><MasterBars/></GPIF>'),
         {'string_pitches': [64, 59, 55, 50, 45, 40]},
         0, [mb], bars, voices, beats, notes, rhythms)
     assert 'count="1"' in out
