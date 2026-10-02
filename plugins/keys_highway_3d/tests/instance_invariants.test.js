@@ -63,3 +63,14 @@ test('a live sharp-layout / octave-gap change rebuilds lanes and notes together'
     assert.match(src, /_sharpMode = d\.sharpMode;\s*_rebuildChartGeometry\(\);/);
     assert.match(src, /if \('octaveGaps' in d\.fx\) _rebuildChartGeometry\(\);/);
 });
+
+test('a mastery change keeps the run totals instead of resetting scoring', () => {
+    // Difficulty Ladder drives mastery during play; wiping hits/misses/streak
+    // on every adjustment made the run's posted stats cover only the time
+    // since the last change. Judged-note keys are (t, midi)-keyed, so they
+    // survive the playable rebuild; only the sweep cursor needs re-anchoring.
+    const fn = src.match(/function _maybeApplyMasteryFilter\(bundle, now\)\s*\{[\s\S]*?\n {8}\}\n/);
+    assert.ok(fn, '_maybeApplyMasteryFilter not found');
+    assert.doesNotMatch(fn[0], /_resetScoring\(\)/);
+    assert.match(fn[0], /_anchorMissSweep\(now\)/);
+});

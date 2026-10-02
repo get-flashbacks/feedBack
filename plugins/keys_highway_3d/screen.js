@@ -3974,15 +3974,17 @@
                 _notation.notes, _notation.phrases, tabNotes, tabChords);
             _notation.playable = filterNotationByHand(_notation.masteryPlayable, _handFilter);
             buildNoteMeshes();
-            // The old playable set's indices/entries no longer line up with
-            // the new one — a stale _sweepCursor position or a "hit" keyed
-            // to a note that just got filtered out would misbehave. This
-            // mirrors the same reset loadNotationForCurrentSong already
-            // does for a fresh chart load.
-            _resetScoring();
-            // …but unlike a fresh chart, playback kept advancing — resume
-            // the miss sweep from the current position so notes the player
-            // already passed aren't retroactively counted as misses.
+            // Unlike a fresh chart load, a mastery change is the SAME run:
+            // hits / misses / streak / best streak carry over, so Difficulty
+            // Ladder adjusting mastery during play doesn't wipe the score
+            // (and the stats posted at song end cover the whole run). The
+            // judged-note sets are keyed by noteKey(t, midi), not by list
+            // index, so they stay valid across the new playable set — and
+            // keeping them stops a note already judged from being counted
+            // again if a later mastery change brings it back into view.
+            // Only the sweep cursor indexes the old list, so re-anchor it:
+            // playback kept advancing, and notes the player already passed
+            // must not be retroactively counted as misses.
             _anchorMissSweep(now);
         }
 
