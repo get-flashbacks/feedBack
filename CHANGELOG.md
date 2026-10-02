@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Keys Highway 3D: a mastery change no longer resets the run's score.** Hits, misses, streak and best streak now carry over when the mastery slider (or Difficulty Ladder's auto-adjust) rebuilds the playable notes, so the stats posted at song end cover the whole run (#94).
 - **Docker and Proxmox builds now include the starter feedpaks.** First-run seeding can find all listed sources instead of repeatedly warning that the packs are missing.
 
 - **`gp8_audio_sync` and `gp_autosync` now route GPIF parsing through the shared hardened parser (`lib/safe_xml.py`) instead of each carrying its own local `defusedxml`-or-stdlib fallback.** Both files parse `Content/score.gpif` out of an imported `.gp`/`.gpx` container — attacker-influenceable input — and previously duplicated the exact try/except-ImportError-then-stdlib-`ET.fromstring` pattern `safe_xml.py` centralized for every other untrusted-XML call site. Consolidating removes two divergent copies of security-relevant parsing logic; also corrected a stale `requirements.txt` comment that claimed both modules already delegated to `safe_xml.py`.
