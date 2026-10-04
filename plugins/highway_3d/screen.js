@@ -1225,12 +1225,32 @@
     // 1.0× at slider=0.5 so the previous locked view is the midpoint.
     const CAM_LOCK_ZOOM_MIN = 0.55;  // slider=0 — closest, biggest fretboard
     const CAM_LOCK_ZOOM_MAX = 1.45;  // slider=1 — furthest
-    // General view-distance range (cameraZoom); 0.5 is neutral (1.0×). The
-    // near end stops at 0.7 because closer than that pushes the outer fret
+    // General view-distance range (cameraZoom): slider 0 → MIN (closest),
+    // 0.5 → exactly 1.0× (neutral, unchanged framing), 1 → MAX (furthest).
+    // The near end stops at 0.7 because closer than that pushes the outer fret
     // numbers and strings off the panel edge (the fret-row guard only probes
     // the camera's centre column).
     const CAM_VIEW_ZOOM_MIN = 0.7;
     const CAM_VIEW_ZOOM_MAX = 1.45;
+    // Piecewise-linear so the midpoint is 1.0× whatever MIN/MAX are (a single
+    // linear blend is only neutral when MIN + MAX === 2).
+    function camViewZoomMul(zoom) {
+        const z = Math.max(0, Math.min(1, Number.isFinite(zoom) ? zoom : 0.5));
+        return z <= 0.5
+            ? CAM_VIEW_ZOOM_MIN + (1 - CAM_VIEW_ZOOM_MIN) * (z / 0.5)
+            : 1 + (CAM_VIEW_ZOOM_MAX - 1) * ((z - 0.5) / 0.5);
+    }
+    // While the lock is engaged cameraLockZoom has already scaled the camera
+    // distance by `lockMul`, and the view zoom multiplies on top of it. Bound
+    // the view zoom so the product never gets closer than min(lockMul, MIN) or
+    // further than max(lockMul, MAX): the two sliders must not stack past the
+    // limits either one documents. `lockMul` is 1 when the lock is not engaged.
+    function camBoundViewZoom(viewMul, lockMul) {
+        const lm = lockMul > 0 ? lockMul : 1;
+        const lo = Math.min(1, CAM_VIEW_ZOOM_MIN / lm);
+        const hi = Math.max(1, CAM_VIEW_ZOOM_MAX / lm);
+        return Math.max(lo, Math.min(hi, viewMul));
+    }
     const CAM_LOCK_CENTER_FRET = 6;  // default camera X center (first-position midpoint)
 
     // ── 3D preview: lookahead fret bounds + smoothed focal X / span ─────────
@@ -15699,7 +15719,12 @@
             curX += (tgtX - curX) * lerp;
             // The fret-row fit guard (end of camUpdate) may dolly the camera back
             // via _fretRowFitBoost; the span-driven tgtDist still owns zooming IN.
-            const _viewZoomMul = CAM_VIEW_ZOOM_MIN + (CAM_VIEW_ZOOM_MAX - CAM_VIEW_ZOOM_MIN) * cameraZoom;
+            // prevLockActive: the lock view was applied this frame, so its own
+            // zoom is already inside tgtDist and the view zoom is bounded by it.
+            const _lockMulNow = prevLockActive
+                ? CAM_LOCK_ZOOM_MIN + (CAM_LOCK_ZOOM_MAX - CAM_LOCK_ZOOM_MIN) * cameraLockZoom
+                : 1;
+            const _viewZoomMul = camBoundViewZoom(camViewZoomMul(cameraZoom), _lockMulNow);
             curDist += (tgtDist * _fretRowFitBoost * _viewZoomMul - curDist) * lerp;
             const dist = curDist * aspectScale;
             const h = CAM_H_BASE * (dist / CAM_DIST_BASE);

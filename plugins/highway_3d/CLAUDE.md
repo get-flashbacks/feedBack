@@ -137,7 +137,9 @@ Each entry names the function or banner you should grep for, plus key sub-blocks
 ### Splitscreen panel controls/settings
 - Per-panel background overrides use `localStorage` keys shaped as `h3d_bg_panel<N>_<key>`. When present, they override the global `h3d_bg_<key>` value for panel `N`; when absent, the global value still applies.
 - Keep per-panel keys to `BG_DEFAULTS` entries that `_bgLoadSettings()` reads. Do not add panel-only keys outside that load path.
-- `panelControls` is a static, host-readable, curated descriptor list for controls a host can expose per panel. It documents the supported per-panel surface; the renderer still loads values through `_bgLoadSettings()`.
+- `panelControls` is a static, host-readable, curated descriptor list for controls a host can expose per panel. It documents the supported per-panel surface; the renderer still loads values through `_bgLoadSettings()`. A descriptor may also set `dependsOn: '<toggle key>'` (e.g. `cameraLockZoom` depends on `cameraLockLow`, because Locked zoom only acts while the lock is engaged). Split Screen's Viz popover consumes it (feedBack-plugin-splitscreen#78): it greys out and disables the control until that toggle is on, and ignores a missing, non-toggle, self-referencing or cyclic target. It is honoured only on the `panelControls` path; core's declared-settings whitelist drops it, so don't rely on it if the plugin ever moves to `capabilities.visualization.settings`. A host that ignores the field still works, with the control simply always enabled.
+
+`cameraZoom` is the general view distance, applied in every camera mode: slider 0.5 is exactly 1.0× (unchanged framing), 0 → 0.7×, 1 → 1.45×. While the lock is engaged it multiplies on top of `cameraLockZoom`, so `camBoundViewZoom` keeps the product within the limits either slider documents.
 - Asset/background image keys remain global-only. Do not make uploaded or selected asset references panel-scoped unless that contract is explicitly widened.
 - Host refresh nudges that call toggle setters must pass real booleans, not strings such as `'false'`, so setters can distinguish `true` from `false`.
 

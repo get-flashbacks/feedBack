@@ -30,7 +30,7 @@ function loadHighway3dStatics() {
     );
     const instrumented = src.replace(
         ANCHOR,
-        `${ANCHOR}\n    window.__h3dTestExports = { BG_DEFAULTS };`,
+        `${ANCHOR}\n    window.__h3dTestExports = { BG_DEFAULTS, camViewZoomMul, camBoundViewZoom };`,
     );
     assert.notEqual(instrumented, src, 'test export injection anchor not found in screen.js');
 
@@ -175,4 +175,46 @@ test('3D Highway exposes static panelControls descriptors for per-panel hosts', 
     assert.equal(cameraLockZoom.min, 0);
     assert.equal(cameraLockZoom.max, 1);
     assert.equal(cameraLockZoom.default, defaults.cameraLockZoom);
+});
+
+// ── cameraZoom: neutral default and bounded combination with Locked zoom ────
+
+test('cameraZoom maps 0 / 0.5 / 1 to 0.7x / exactly 1.0x / 1.45x and is monotonic', () => {
+    const { camViewZoomMul } = loadHighway3dStatics().__h3dTestExports;
+    assert.equal(camViewZoomMul(0.5), 1, 'the default slider position must leave the framing unchanged');
+    assert.equal(camViewZoomMul(0), 0.7);
+    assert.equal(camViewZoomMul(1), 1.45);
+    let prev = -Infinity;
+    for (let z = 0; z <= 1.0001; z += 0.05) {
+        const m = camViewZoomMul(z);
+        assert.ok(m >= prev, `non-decreasing at ${z}`);
+        prev = m;
+    }
+    assert.equal(camViewZoomMul(NaN), 1, 'a bad value falls back to neutral');
+    assert.equal(camViewZoomMul(-3), 0.7);
+    assert.equal(camViewZoomMul(9), 1.45);
+});
+
+test('cameraZoom default in BG_DEFAULTS is the neutral slider position', () => {
+    const { BG_DEFAULTS, camViewZoomMul } = loadHighway3dStatics().__h3dTestExports;
+    assert.equal(camViewZoomMul(BG_DEFAULTS.cameraZoom), 1);
+});
+
+test('with the lock engaged the two zooms cannot stack past either one\'s limits', () => {
+    const { camViewZoomMul, camBoundViewZoom } = loadHighway3dStatics().__h3dTestExports;
+    const total = (lockMul, zoom) => lockMul * camBoundViewZoom(camViewZoomMul(zoom), lockMul);
+    for (const lockMul of [0.55, 0.8, 1, 1.2, 1.45]) {
+        for (const zoom of [0, 0.25, 0.5, 0.75, 1]) {
+            const t = total(lockMul, zoom);
+            assert.ok(t >= Math.min(lockMul, 0.7) - 1e-9, `lock ${lockMul} zoom ${zoom}: ${t} is closer than allowed`);
+            assert.ok(t <= Math.max(lockMul, 1.45) + 1e-9, `lock ${lockMul} zoom ${zoom}: ${t} is further than allowed`);
+        }
+    }
+    // the exact case the review flagged: both sliders at the near end
+    assert.ok(total(0.55, 0) >= 0.55 - 1e-9, 'must not reach 0.55 * 0.7 = 0.385');
+    // and both at the far end
+    assert.ok(total(1.45, 1) <= 1.45 + 1e-9, 'must not reach 1.45 * 1.45 = 2.1');
+    // without the lock (lockMul 1) the view zoom keeps its full range
+    assert.equal(total(1, 0), 0.7);
+    assert.equal(total(1, 1), 1.45);
 });
