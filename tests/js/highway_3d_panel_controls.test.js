@@ -30,7 +30,7 @@ function loadHighway3dStatics() {
     );
     const instrumented = src.replace(
         ANCHOR,
-        `${ANCHOR}\n    window.__h3dTestExports = { BG_DEFAULTS, camViewZoomMul, camBoundViewZoom };`,
+        `${ANCHOR}\n    window.__h3dTestExports = { BG_DEFAULTS, camViewZoomMul, camBoundViewZoom, camLockZoomMul };`,
     );
     assert.notEqual(instrumented, src, 'test export injection anchor not found in screen.js');
 
@@ -219,4 +219,19 @@ test('with the lock engaged the two zooms cannot stack past either one\'s limits
     // without the lock (lockMul 1) the view zoom keeps its full range
     assert.equal(total(1, 0), 0.7);
     assert.equal(total(1, 1), 1.45);
+});
+
+test('Locked zoom has one multiplier mapping: neutral at 0.5 and used by every locked-camera site', () => {
+    const { camLockZoomMul, BG_DEFAULTS } = loadHighway3dStatics().__h3dTestExports;
+    assert.equal(camLockZoomMul(0.5), 1, 'default Locked zoom must keep the previous locked view');
+    assert.equal(camLockZoomMul(0), 0.55);
+    assert.equal(camLockZoomMul(1), 1.45);
+    assert.equal(camLockZoomMul(BG_DEFAULTS.cameraLockZoom), 1);
+    // The mapping lives in exactly one place. A second copy of the expression
+    // would let the cameraZoom bound and the locked tgtDist drift apart.
+    const src = fs.readFileSync(SCREEN_JS, 'utf8');
+    const copies = src.match(/CAM_LOCK_ZOOM_MIN\s*\+/g) || [];
+    assert.equal(copies.length, 1, 'only camLockZoomMul may compute CAM_LOCK_ZOOM_MIN + (...) * zoom');
+    assert.ok((src.match(/camLockZoomMul\(cameraLockZoom\)/g) || []).length >= 4,
+        'the three locked tgtDist sites and the cameraZoom bound must all call camLockZoomMul');
 });

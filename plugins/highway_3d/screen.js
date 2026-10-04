@@ -1251,6 +1251,12 @@
         const hi = Math.max(1, CAM_VIEW_ZOOM_MAX / lm);
         return Math.max(lo, Math.min(hi, viewMul));
     }
+    // The Locked-zoom multiplier (cameraLockZoom 0..1 -> MIN..MAX; 0.5 -> 1.0x).
+    // Every place that folds it into the locked tgtDist, and the bound above,
+    // must use this one mapping so retuning it cannot desync them.
+    function camLockZoomMul(zoom) {
+        return CAM_LOCK_ZOOM_MIN + (CAM_LOCK_ZOOM_MAX - CAM_LOCK_ZOOM_MIN) * zoom;
+    }
     const CAM_LOCK_CENTER_FRET = 6;  // default camera X center (first-position midpoint)
 
     // ── 3D preview: lookahead fret bounds + smoothed focal X / span ─────────
@@ -9868,8 +9874,7 @@
                 // cameraLockZoom slider 0..1 blends between MIN (closest)
                 // and MAX (furthest). Default 0.5 maps to ~1.0× so existing
                 // users see the same locked view as before this slider.
-                const lockZoomMul  = CAM_LOCK_ZOOM_MIN +
-                    (CAM_LOCK_ZOOM_MAX - CAM_LOCK_ZOOM_MIN) * cameraLockZoom;
+                const lockZoomMul  = camLockZoomMul(cameraLockZoom);
                 tgtX             = xFretMid(CAM_LOCK_CENTER_FRET);
                 tgtDist          = (lockedBaseU + lockedBonusU) * K * lockZoomMul;
                 prevLowFretBonus = lockedBonusU;
@@ -11767,8 +11772,7 @@
                         if (lockSnapEl) {
                             const lockedBaseU = camBaseDistU(12);
                             const lockedBonusU = camLowFretPullbackU(1);
-                            const lockZoomMul = CAM_LOCK_ZOOM_MIN +
-                                (CAM_LOCK_ZOOM_MAX - CAM_LOCK_ZOOM_MIN) * cameraLockZoom;
+                            const lockZoomMul = camLockZoomMul(cameraLockZoom);
                             tgtX = xFretMid(CAM_LOCK_CENTER_FRET);
                             tgtDist = (lockedBaseU + lockedBonusU) * K * lockZoomMul;
                             prevLowFretBonus = lockedBonusU;
@@ -13871,8 +13875,7 @@
 
                 if (lookaheadLockLowEligible) {
                     const lockedBaseU = camBaseDistU(12);
-                    const lockZoomMul = CAM_LOCK_ZOOM_MIN +
-                        (CAM_LOCK_ZOOM_MAX - CAM_LOCK_ZOOM_MIN) * cameraLockZoom;
+                    const lockZoomMul = camLockZoomMul(cameraLockZoom);
                     lookaheadSmoothCamStep(dtSec, xFretMid(CAM_LOCK_CENTER_FRET), 12);
                     tgtX = _lookaheadCamX;
                     tgtDist = (lockedBaseU + _lookaheadLowBonusU) * K * lockZoomMul;
@@ -15722,7 +15725,7 @@
             // prevLockActive: the lock view was applied this frame, so its own
             // zoom is already inside tgtDist and the view zoom is bounded by it.
             const _lockMulNow = prevLockActive
-                ? CAM_LOCK_ZOOM_MIN + (CAM_LOCK_ZOOM_MAX - CAM_LOCK_ZOOM_MIN) * cameraLockZoom
+                ? camLockZoomMul(cameraLockZoom)
                 : 1;
             const _viewZoomMul = camBoundViewZoom(camViewZoomMul(cameraZoom), _lockMulNow);
             curDist += (tgtDist * _fretRowFitBoost * _viewZoomMul - curDist) * lerp;
