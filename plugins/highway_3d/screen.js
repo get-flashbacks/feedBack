@@ -16675,6 +16675,8 @@
             max: 1,
             step: 0.05,
             default: BG_DEFAULTS.cameraLockZoom,
+            // Only affects the locked view; hosts grey it out until the lock is on.
+            dependsOn: 'cameraLockLow',
         },
     ];
     // Static metadata exposed on the factory:
