@@ -1225,9 +1225,11 @@
     // 1.0× at slider=0.5 so the previous locked view is the midpoint.
     const CAM_LOCK_ZOOM_MIN = 0.55;  // slider=0 — closest, biggest fretboard
     const CAM_LOCK_ZOOM_MAX = 1.45;  // slider=1 — furthest
-    // General view-distance range (cameraZoom). Same span as the locked
-    // zoom so the two sliders feel alike; 0.5 is neutral (1.0×).
-    const CAM_VIEW_ZOOM_MIN = 0.55;
+    // General view-distance range (cameraZoom); 0.5 is neutral (1.0×). The
+    // near end stops at 0.7 because closer than that pushes the outer fret
+    // numbers and strings off the panel edge (the fret-row guard only probes
+    // the camera's centre column).
+    const CAM_VIEW_ZOOM_MIN = 0.7;
     const CAM_VIEW_ZOOM_MAX = 1.45;
     const CAM_LOCK_CENTER_FRET = 6;  // default camera X center (first-position midpoint)
 
