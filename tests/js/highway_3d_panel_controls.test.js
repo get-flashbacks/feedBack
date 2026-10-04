@@ -202,18 +202,20 @@ test('cameraZoom default in BG_DEFAULTS is the neutral slider position', () => {
 
 test('with the lock engaged the two zooms cannot stack past either one\'s limits', () => {
     const { camViewZoomMul, camBoundViewZoom } = loadHighway3dStatics().__h3dTestExports;
+    // float slack only; the products involved differ from their limits by far more
+    const TOLERANCE = 1 / 1000000;
     const total = (lockMul, zoom) => lockMul * camBoundViewZoom(camViewZoomMul(zoom), lockMul);
     for (const lockMul of [0.55, 0.8, 1, 1.2, 1.45]) {
         for (const zoom of [0, 0.25, 0.5, 0.75, 1]) {
             const t = total(lockMul, zoom);
-            assert.ok(t >= Math.min(lockMul, 0.7) - 1e-9, `lock ${lockMul} zoom ${zoom}: ${t} is closer than allowed`);
-            assert.ok(t <= Math.max(lockMul, 1.45) + 1e-9, `lock ${lockMul} zoom ${zoom}: ${t} is further than allowed`);
+            assert.ok(t >= Math.min(lockMul, 0.7) - TOLERANCE, `lock ${lockMul} zoom ${zoom}: ${t} is closer than allowed`);
+            assert.ok(t <= Math.max(lockMul, 1.45) + TOLERANCE, `lock ${lockMul} zoom ${zoom}: ${t} is further than allowed`);
         }
     }
     // the exact case the review flagged: both sliders at the near end
-    assert.ok(total(0.55, 0) >= 0.55 - 1e-9, 'must not reach 0.55 * 0.7 = 0.385');
+    assert.ok(total(0.55, 0) >= 0.55 - TOLERANCE, 'must not reach 0.55 * 0.7 = 0.385');
     // and both at the far end
-    assert.ok(total(1.45, 1) <= 1.45 + 1e-9, 'must not reach 1.45 * 1.45 = 2.1');
+    assert.ok(total(1.45, 1) <= 1.45 + TOLERANCE, 'must not reach 1.45 * 1.45 = 2.1');
     // without the lock (lockMul 1) the view zoom keeps its full range
     assert.equal(total(1, 0), 0.7);
     assert.equal(total(1, 1), 1.45);
