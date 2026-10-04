@@ -1225,6 +1225,10 @@
     // 1.0× at slider=0.5 so the previous locked view is the midpoint.
     const CAM_LOCK_ZOOM_MIN = 0.55;  // slider=0 — closest, biggest fretboard
     const CAM_LOCK_ZOOM_MAX = 1.45;  // slider=1 — furthest
+    // General view-distance range (cameraZoom). Same span as the locked
+    // zoom so the two sliders feel alike; 0.5 is neutral (1.0×).
+    const CAM_VIEW_ZOOM_MIN = 0.55;
+    const CAM_VIEW_ZOOM_MAX = 1.45;
     const CAM_LOCK_CENTER_FRET = 6;  // default camera X center (first-position midpoint)
 
     // ── 3D preview: lookahead fret bounds + smoothed focal X / span ─────────
@@ -2414,7 +2418,7 @@
         return _bgBandsCache;
     }
 
-    const BG_DEFAULTS = { style: 'particles', intensity: 0.5, reactive: true, palette: 'default', bgTheme: 'default', hwTheme: 'default', showFretOnNote: true, fretNumberGhostScope: 'chords', cameraSmoothing: 0.5, zoomSmoothing: 0.5, tiltSmoothing: 0.5, cameraLockLow: false, cameraLockZoom: 0.5, cameraMode: 'lookahead', nutHeadstockVisible: true, tuningLabelsVisible: true, nutColor: '#f5f3f0', headstockColor: '#d4b48a', textSize: 0.5, vibrancy: 0.85, glow: 0.25, customImageDataUrl: '', customImageName: '', customVideoName: '', chordDiagramVisible: true, chordDiagramSize: 0.5, chordDiagramPosition: 'tl', fretColumnMarkerCadence: 1, projectionVisible: true, inlayLabelsVisible: false, sectionLabelsOnHighway: false, sectionHudVisible: false, sectionHudPosition: 'tr', sectionHudSize: 0.5, toneHudVisible: false, toneHudPosition: 'tl', toneHudSize: 0.5, fpsVisible: false, fretDividersVisible: true, slideArrowApproachVisible: true, slideArrowNeckVisible: true, slideArrowChainPreviewVisible: true, hitFx: 0.7, sparks: true, cinematic: true, verdictMarks: true, timingFx: true, streakFx: true, bloom: true };
+    const BG_DEFAULTS = { style: 'particles', intensity: 0.5, reactive: true, palette: 'default', bgTheme: 'default', hwTheme: 'default', showFretOnNote: true, fretNumberGhostScope: 'chords', cameraSmoothing: 0.5, zoomSmoothing: 0.5, tiltSmoothing: 0.5, cameraLockLow: false, cameraLockZoom: 0.5, cameraZoom: 0.5, cameraMode: 'lookahead', nutHeadstockVisible: true, tuningLabelsVisible: true, nutColor: '#f5f3f0', headstockColor: '#d4b48a', textSize: 0.5, vibrancy: 0.85, glow: 0.25, customImageDataUrl: '', customImageName: '', customVideoName: '', chordDiagramVisible: true, chordDiagramSize: 0.5, chordDiagramPosition: 'tl', fretColumnMarkerCadence: 1, projectionVisible: true, inlayLabelsVisible: false, sectionLabelsOnHighway: false, sectionHudVisible: false, sectionHudPosition: 'tr', sectionHudSize: 0.5, toneHudVisible: false, toneHudPosition: 'tl', toneHudSize: 0.5, fpsVisible: false, fretDividersVisible: true, slideArrowApproachVisible: true, slideArrowNeckVisible: true, slideArrowChainPreviewVisible: true, hitFx: 0.7, sparks: true, cinematic: true, verdictMarks: true, timingFx: true, streakFx: true, bloom: true };
     // User-selectable, persistable bg styles — must mirror settings.html's
     // VALID_STYLES. 'venue' is deliberately NOT here: it is an internal effective
     // style reached only via _venueSceneOverride (the viz-picker Venue flow), so
@@ -2834,7 +2838,7 @@
     // hysteresis; zoomSmoothing the zoom dead zone; tiltSmoothing the
     // vertical-tilt deadband + correction strength. All three slider-
     // shaped settings share the same parse + clamp behaviour.
-    const _BG_FLOAT_KEYS = new Set(['intensity', 'cameraSmoothing', 'zoomSmoothing', 'tiltSmoothing', 'cameraLockZoom', 'textSize', 'vibrancy', 'glow', 'chordDiagramSize', 'sectionHudSize', 'toneHudSize', 'hitFx']);
+    const _BG_FLOAT_KEYS = new Set(['intensity', 'cameraSmoothing', 'zoomSmoothing', 'tiltSmoothing', 'cameraLockZoom', 'cameraZoom', 'textSize', 'vibrancy', 'glow', 'chordDiagramSize', 'sectionHudSize', 'toneHudSize', 'hitFx']);
     function _bgCoerce(key, val) {
         if (_BG_FLOAT_KEYS.has(key)) {
             const n = parseFloat(val);
@@ -2956,6 +2960,7 @@
     window.h3dBgSetTiltSmoothing = (v) => _bgWriteGlobal('tiltSmoothing', v);
     window.h3dBgSetCameraLockLow = (v) => _bgWriteGlobal('cameraLockLow', !!v);
     window.h3dBgSetCameraLockZoom = (v) => _bgWriteGlobal('cameraLockZoom', v);
+    window.h3dBgSetCameraZoom = (v) => _bgWriteGlobal('cameraZoom', v);
     window.h3dBgSetCameraMode = (v) => {
         let s = String(v);
         if (s === 'classic') s = 'steady';
@@ -4859,6 +4864,12 @@
         // fretboard), 0.5 → 1.0× (the default locked view), 1 → CAM_LOCK_ZOOM_MAX
         // (furthest). Inactive when the lock isn't engaged.
         let cameraLockZoom = 0.5;
+        // General view distance, applied in every camera mode (locked or
+        // not). Slider 0..1 maps to a multiplier on the final camera
+        // distance: 0 → CAM_VIEW_ZOOM_MIN (closest), 0.5 → 1.0× (default,
+        // unchanged framing), 1 → CAM_VIEW_ZOOM_MAX. Mainly for small
+        // splitscreen panels, where the auto-framed view reads as too far.
+        let cameraZoom = 0.5;
         /** 'steady' = recency-weighted centroid + hysteresis (#34); 'lookahead' = wide preview window + smooth focal. */
         let cameraMode = BG_DEFAULTS.cameraMode;
         // Global text-size multiplier for in-scene text sprites (chord
@@ -8488,7 +8499,7 @@
                     changedKey === 'fretNumberGhostScope' ||
                     changedKey === 'cameraSmoothing' || changedKey === 'zoomSmoothing' ||
                     changedKey === 'tiltSmoothing' || changedKey === 'cameraLockLow' ||
-                    changedKey === 'cameraLockZoom' || changedKey === 'cameraMode' ||
+                    changedKey === 'cameraLockZoom' || changedKey === 'cameraZoom' || changedKey === 'cameraMode' ||
                     changedKey === 'textSize' ||
                     changedKey === 'chordDiagramSize' || changedKey === 'chordDiagramPosition' ||
                     changedKey === 'fretColumnMarkerCadence' ||
@@ -8793,6 +8804,7 @@
                 : cameraSmoothing;
             cameraLockLow = _bgReadSetting(panelKey, 'cameraLockLow');
             cameraLockZoom = _bgReadSetting(panelKey, 'cameraLockZoom');
+            cameraZoom = _bgReadSetting(panelKey, 'cameraZoom');
             cameraMode = _bgReadSetting(panelKey, 'cameraMode');
             textSize             = _bgReadSetting(panelKey, 'textSize');
             vibrancy             = _bgReadSetting(panelKey, 'vibrancy');
@@ -15685,7 +15697,8 @@
             curX += (tgtX - curX) * lerp;
             // The fret-row fit guard (end of camUpdate) may dolly the camera back
             // via _fretRowFitBoost; the span-driven tgtDist still owns zooming IN.
-            curDist += (tgtDist * _fretRowFitBoost - curDist) * lerp;
+            const _viewZoomMul = CAM_VIEW_ZOOM_MIN + (CAM_VIEW_ZOOM_MAX - CAM_VIEW_ZOOM_MIN) * cameraZoom;
+            curDist += (tgtDist * _fretRowFitBoost * _viewZoomMul - curDist) * lerp;
             const dist = curDist * aspectScale;
             const h = CAM_H_BASE * (dist / CAM_DIST_BASE);
 
@@ -16628,6 +16641,15 @@
     // removed — per-string colors are set via the core "Highway String Colors"
     // UI, which drives both highways by named string.
     window.feedBackViz_highway_3d.panelControls = [
+        {
+            key: 'cameraZoom',
+            label: 'Zoom (In ↔ Out)',
+            type: 'range',
+            min: 0,
+            max: 1,
+            step: 0.05,
+            default: BG_DEFAULTS.cameraZoom,
+        },
         {
             key: 'cameraSmoothing',
             label: 'Camera smoothing (X-pan)',

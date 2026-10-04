@@ -12,7 +12,7 @@ const SCREEN_JS = path.join(__dirname, '..', '..', 'plugins', 'highway_3d', 'scr
 
 // 'palette' was removed — per-string colors are now set via the core
 // "Highway String Colors" UI, which drives both highways by named string.
-const REQUIRED_KEYS = ['cameraSmoothing', 'cameraLockLow', 'cameraLockZoom'];
+const REQUIRED_KEYS = ['cameraZoom', 'cameraSmoothing', 'cameraLockLow', 'cameraLockZoom'];
 const FORBIDDEN_KEYS = ['customImageDataUrl', 'customImageName', 'customVideoName'];
 const VALID_TYPES = new Set(['select', 'range', 'toggle']);
 
@@ -91,7 +91,7 @@ test('3D Highway exposes static panelControls descriptors for per-panel hosts', 
     const controls = cloneJson(factory.panelControls);
     const defaults = cloneJson(window.__h3dTestExports.BG_DEFAULTS);
     const keys = controls.map((control) => control && control.key);
-    assert.deepEqual(keys, REQUIRED_KEYS, 'panelControls must expose exactly the issue #247 control set');
+    assert.deepEqual(keys, REQUIRED_KEYS, 'panelControls must expose exactly the issue #247 control set plus the general cameraZoom');
     const duplicateKeys = keys.filter((key, index) => keys.indexOf(key) !== index);
     assert.deepEqual(duplicateKeys, [], 'panelControls keys must be unique');
 
