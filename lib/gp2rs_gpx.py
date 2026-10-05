@@ -2331,6 +2331,13 @@ def convert_vocal_track(
         if bid != '-1' and bid:
             bar = bars_by_id.get(bid)
             if bar is not None:
+                # Track whether this bar is claimed by an ongoing vocal tie
+                # (the tie destination lives in the first voice and extends
+                # the vocal into this bar). When claimed, later voices'
+                # events are still processed but only disjoint ones survive
+                # the overlap filter — overlapping events are excluded so the
+                # flat timeline stays conflict-free.
+                voice_claimed = False
                 for vid in bar.findtext('Voices', '').split():
                     if vid == '-1':
                         continue
@@ -2338,8 +2345,8 @@ def convert_vocal_track(
                     if voice is None:
                         continue
 
+                    voice_was_claimed = voice_claimed
                     voice_time = current_time
-                    voice_claimed = False
                     for beat_id in voice.findtext('Beats', '').split():
                         beat_el = beats_dict.get(beat_id)
                         if beat_el is None:
@@ -2384,8 +2391,18 @@ def convert_vocal_track(
                                                 raw_vocals[-1]['length'],
                                                 (voice_time + audio_offset + dur) - raw_vocals[-1]['time']
                                             ),
-                                        )
-                                        voice_claimed = True
+                                         )
+                                        # Claim the bar only when the tie
+                                        # extends the vocal into the bar or
+                                        # the capped vocal duration still
+                                        # overlaps a later voice; otherwise
+                                        # the tie is a dangling flag (e.g.
+                                        # a fan tab that stopped
+                                        # transcribing lyrics) and the bar
+                                        # stays available for a
+                                        # lyric-bearing voice.
+                                        if raw_vocals[-1]['time'] + raw_vocals[-1]['length'] > current_time + audio_offset:
+                                            voice_claimed = True
                                     # Do NOT advance voice_time here — the
                                     # beat-end `voice_time += dur` below advances
                                     # exactly once per beat. Incrementing here too
@@ -2407,9 +2424,27 @@ def convert_vocal_track(
                         if lyric_raw:
                             lyric = _gpx_lyric_to_rs(lyric_raw)
                             if lyric:
+                                this_time = round(voice_time + audio_offset, 3)
+                                this_length = round(dur, 3)
+                                # When this is a later voice (the bar was already
+                                # claimed by an earlier voice's tie or lyric),
+                                # only keep the event if it doesn't overlap the
+                                # selected vocal timeline. Disjoint events are
+                                # preserved; overlapping ones are excluded so
+                                # the flat timeline stays conflict-free.
+                                if voice_was_claimed and raw_vocals:
+                                    this_start = this_time
+                                    this_end = this_time + this_length
+                                    _overlaps = any(
+                                        v['time'] < this_end and (v['time'] + v['length']) > this_start
+                                        for v in raw_vocals
+                                    )
+                                    if _overlaps:
+                                        voice_time += dur
+                                        continue
                                 raw_vocals.append({
-                                    'time': round(voice_time + audio_offset, 3),
-                                    'length': round(dur, 3),
+                                    'time': this_time,
+                                    'length': this_length,
                                     'lyric': lyric,
                                     'note': midi_note,
                                     'is_tie_origin': is_tie_origin,
@@ -2418,23 +2453,15 @@ def convert_vocal_track(
 
                         voice_time += dur
 
-                    # Only the first voice in a bar that *claims* the vocal
-                    # timeline feeds it: some tabs put a second, genuinely
-                    # different simultaneous lyric line in a bar's second GP
-                    # voice (e.g. an overlapping duet echo) rather than a
-                    # silent alternate-rhythm layer, and appending both
-                    # voices' beats to one flat timeline yields an
-                    # out-of-order, overlapping token stream instead of two
-                    # coherent lines. Until there's a multi-voice output
-                    # shape, drop the second+ voice rather than corrupt the
-                    # primary one. A voice claims the timeline by appending a
-                    # syllable or by tying the previous one across the bar, so
-                    # a silent leading layer still falls through to the voice
-                    # that carries the words (feedBack#103).
-                    if voice_claimed:
-                        break
+                    # All voices are processed — overlapping later-voice events
+                    # are filtered above; disjoint ones are kept and sorted into
+                    # time order after the bar loop.
 
         current_time += bar_duration
+
+    # Sort into time order: later voices' disjoint events are collected after
+    # the claiming voice's events within each bar, so they may be out of order.
+    raw_vocals.sort(key=lambda v: v['time'])
 
     song_length = current_time + audio_offset
 

@@ -1526,3 +1526,45 @@ def test_convert_vocal_track_drops_second_voice_after_a_tie_extension():
     assert [v.get('lyric') for v in vocals] == ['hel']
     # The tie extension still happens — it just no longer leaves the bar open.
     assert float(vocals[0].get('length')) == pytest.approx(4.0)
+
+
+def test_convert_vocal_track_preserves_disjoint_second_voice():
+    """A second voice's lyric that doesn't overlap the selected vocal timeline
+    is kept and emitted in time order (feedBack#103 follow-up).
+
+    Bar 0: one 4/4 bar, 120 BPM → 2.0 s total.
+    Voice 0: beat 0 (quarter, [0.0, 0.5]) sings "hel"; beat 1 has no lyric.
+    Voice 1: beat 0 has no lyric; beat 1 (quarter, [0.5, 1.0]) sings "lo".
+
+    "hel" spans [0.0, 0.5]; "lo" spans [0.5, 1.0] — disjoint, so both survive.
+    """
+    mb = safe_fromstring('<MasterBar><Time>4/4</Time><Bars>0</Bars></MasterBar>')
+    bars = {'0': safe_fromstring('<Bar><Voices>0 1</Voices></Bar>')}
+    voices = {
+        '0': safe_fromstring('<Voice><Beats>0 1</Beats></Voice>'),
+        '1': safe_fromstring('<Voice><Beats>2 3</Beats></Voice>'),
+    }
+    beats = {
+        '0': safe_fromstring(
+            '<Beat><Rhythm ref="r0"/><Lyrics><Line>hel</Line></Lyrics>'
+            '<Notes>0</Notes></Beat>'),
+        '1': safe_fromstring('<Beat><Rhythm ref="r0"/><Notes>0</Notes></Beat>'),
+        '2': safe_fromstring('<Beat><Rhythm ref="r0"/><Notes>0</Notes></Beat>'),
+        '3': safe_fromstring(
+            '<Beat><Rhythm ref="r0"/><Lyrics><Line>lo</Line></Lyrics>'
+            '<Notes>0</Notes></Beat>'),
+    }
+    notes = {'0': safe_fromstring(
+        '<Note><Properties><Property name="String"><String>0</String></Property>'
+        '<Property name="Fret"><Fret>5</Fret></Property></Properties></Note>')}
+    rhythms = {'r0': safe_fromstring(
+        '<Rhythm><NoteValue>Quarter</NoteValue></Rhythm>')}
+    out = convert_vocal_track(
+        safe_fromstring('<GPIF><MasterBars/></GPIF>'),
+        {'string_pitches': [64, 59, 55, 50, 45, 40]},
+        0, [mb], bars, voices, beats, notes, rhythms)
+    vocals = safe_fromstring(out).findall('vocal')
+    lyrics = [v.get('lyric') for v in vocals]
+    assert lyrics == ['hel', 'lo']
+    times = [float(v.get('time')) for v in vocals]
+    assert times == sorted(times)
