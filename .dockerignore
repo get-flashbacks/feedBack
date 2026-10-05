@@ -60,6 +60,12 @@ docs/*/
 docs/diagnostics/*
 !docs/diagnostics/*.sloppak
 
+# Ship only the starter packs that builtin_content seeds on first run.
+!content/
+content/*/
+!content/starter/
+!content/starter/*.feedpak
+
 # Exclude common developer artifacts even inside the whitelisted trees so a
 # venv / cache / build output never gets baked into the image.
 **/__pycache__/

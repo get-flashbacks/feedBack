@@ -1,0 +1,42 @@
+# Monthly dependency checks. Majors stay outside the minor/patch groups.
+# Range-only Python requirements stay individual: SemVer grouping needs a concrete current version.
+version: 2
+updates:
+- package-ecosystem: github-actions
+  directory: /
+  schedule:
+    interval: monthly
+  open-pull-requests-limit: 5
+  groups:
+    minor-and-patch:
+      patterns:
+      - '*'
+      update-types:
+      - minor
+      - patch
+  commit-message:
+    prefix: core
+    include: scope
+- package-ecosystem: npm
+  directory: /
+  schedule:
+    interval: monthly
+  open-pull-requests-limit: 5
+  groups:
+    minor-and-patch:
+      patterns:
+      - '*'
+      update-types:
+      - minor
+      - patch
+  commit-message:
+    prefix: core
+    include: scope
+- package-ecosystem: pip
+  directory: /
+  schedule:
+    interval: monthly
+  open-pull-requests-limit: 5
+  commit-message:
+    prefix: core
+    include: scope

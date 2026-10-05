@@ -20,7 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
           cache: 'pip'
@@ -68,7 +68,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '20'
 
@@ -93,7 +93,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
@@ -162,7 +162,7 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
           cache: 'pip'
@@ -234,7 +234,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '20'
 
@@ -243,3 +243,32 @@ jobs:
 
       - name: ESLint (size norm + module hygiene)
         run: npm run lint
+
+  docker-pins:
+    # Guard the supply chain of the static FFmpeg baked into the image. The
+    # image downloads an executable at build time; a mutable ref (`latest`)
+    # means two builds of one commit can embed different binaries, a change in
+    # a moving binary enters the shipped image while bypassing the repository
+    # diff, and the provenance labels record names that cannot identify the
+    # payload. Motivated by #105, where the pins were dropped to chase a 404
+    # and the `latest` + `ffmpeg-n7.1-latest-*` pair turned out to 404 anyway.
+    #
+    # The gate (tools/check_docker_pins.py) requires a retained immutable
+    # release, a non-empty per-arch SHA-256, verification of that hash during
+    # the build, a hard fail when the pin is missing, labels that agree with
+    # what was verified, and a matching pin in the Proxmox CT builder.
+    # Hermetic — no network; the artifact's existence upstream is BtbN's
+    # retention policy, not something a PR gate can assert.
+    name: docker-pins
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Check Dockerfile / CT builder FFmpeg pins
+        run: python tools/check_docker_pins.py

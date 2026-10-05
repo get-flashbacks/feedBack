@@ -23,9 +23,12 @@ update `BUNDLED_ROOTS` below.
 """
 
 import ast
+import fnmatch
 import importlib.util
 import pathlib
+import re
 
+import builtin_content
 import pytest
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -33,6 +36,36 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 # Directories every packaging path copies wholesale, plus the files copied by name.
 BUNDLED_ROOTS = ("lib", "plugins", "data", "static")
 BUNDLED_FILES = ("server.py", "main.py")
+
+
+def test_every_starter_source_is_packaged():
+    """The seeder's source list must reach both server packaging paths."""
+    dockerfile = (REPO_ROOT / "Dockerfile").read_text()
+    copy_patterns = re.findall(
+        r"^COPY\s+(content/starter/\S+)\s+/app/content/starter/\s*$",
+        dockerfile,
+        flags=re.MULTILINE,
+    )
+    ignore_rules = [
+        line.strip() for line in (REPO_ROOT / ".dockerignore").read_text().splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    ct_builder = (REPO_ROOT / "build-proxmox-ct.sh").read_text()
+    if "BUILTIN_STARTER_SOURCES" not in ct_builder:
+        pytest.fail("CT builder does not read the starter source list")
+    if 'cp "${starter_sources[@]}" "${ROOTFS}${APP_DIR}/content/starter/"' not in ct_builder:
+        pytest.fail("CT builder does not copy the listed starter sources")
+
+    for _, rel in builtin_content.BUILTIN_STARTER_SOURCES:
+        if not any(fnmatch.fnmatchcase(rel, pattern) for pattern in copy_patterns):
+            pytest.fail(f"Dockerfile does not copy starter source {rel}")
+        for path in ("content/", "content/starter/", rel):
+            matching = [
+                rule for rule in ignore_rules
+                if fnmatch.fnmatchcase(path, rule.removeprefix("!"))
+            ]
+            if not matching or not matching[-1].startswith("!"):
+                pytest.fail(f"Docker excludes starter source {rel} at {path}")
 
 
 def _server_toplevel_imports():

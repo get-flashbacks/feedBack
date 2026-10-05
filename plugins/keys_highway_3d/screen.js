@@ -1922,6 +1922,10 @@
         // additionally applies the selected hand and is the sole render/score list.
         let _notation = null;  // {notes, range, markers, phrases, masteryPlayable, playable}
         let _handFilter = readHandFilterSetting();
+        // Per-instance override set by a host (splitscreen's per-panel popover)
+        // via applySetting('handFilter'); null follows the global setting.
+        // Survives destroy()/init() so a panel keeps its hand across songs.
+        let _handOverride = null;
         // Mastery fraction (0..1) `_notation.masteryPlayable` was last
         // computed against — `null` forces a recompute on the first draw()
         // after a chart loads. feedBack#67.
@@ -3286,6 +3290,25 @@
             _hitGlowMats.push(flatGlowMat, upGlowMat);
         }
 
+        // Switch this instance's hand filter. A no-op when unchanged, so a
+        // host re-applying the same value (splitscreen restores on every
+        // provider refresh) can't reset scoring mid-song. Meshes are rebuilt
+        // only once the scene exists; before that, the next build reads the
+        // refiltered `playable`.
+        function _setHandFilter(next) {
+            if (next === _handFilter) return;
+            _handFilter = next;
+            if (!_notation) return;
+            _notation.playable = filterNotationByHand(_notation.masteryPlayable, _handFilter);
+            if (!notesGroup) return;
+            const curTime = _latestTime;
+            buildNoteMeshes();
+            _resetScoring();
+            // same as the mastery path: resume the sweep where playback is
+            // now — notes already elapsed must not re-sweep as misses
+            _anchorMissSweep(curTime);
+        }
+
         function buildNoteMeshes() {
             _clearGroup(notesGroup);
             _clearNoteCaches();
@@ -3951,15 +3974,17 @@
                 _notation.notes, _notation.phrases, tabNotes, tabChords);
             _notation.playable = filterNotationByHand(_notation.masteryPlayable, _handFilter);
             buildNoteMeshes();
-            // The old playable set's indices/entries no longer line up with
-            // the new one — a stale _sweepCursor position or a "hit" keyed
-            // to a note that just got filtered out would misbehave. This
-            // mirrors the same reset loadNotationForCurrentSong already
-            // does for a fresh chart load.
-            _resetScoring();
-            // …but unlike a fresh chart, playback kept advancing — resume
-            // the miss sweep from the current position so notes the player
-            // already passed aren't retroactively counted as misses.
+            // Unlike a fresh chart load, a mastery change is the SAME run:
+            // hits / misses / streak / best streak carry over, so Difficulty
+            // Ladder adjusting mastery during play doesn't wipe the score
+            // (and the stats posted at song end cover the whole run). The
+            // judged-note sets are keyed by noteKey(t, midi), not by list
+            // index, so they stay valid across the new playable set — and
+            // keeping them stops a note already judged from being counted
+            // again if a later mastery change brings it back into view.
+            // Only the sweep cursor indexes the old list, so re-anchor it:
+            // playback kept advancing, and notes the player already passed
+            // must not be retroactively counted as misses.
             _anchorMissSweep(now);
         }
 
@@ -4243,7 +4268,7 @@
                 // viz is torn down) must not come up stale on a later init().
                 _palette = readPaletteSetting();
                 _sharpMode = readSharpModeSetting();
-                _handFilter = readHandFilterSetting();
+                _handFilter = _handOverride || readHandFilterSetting();
                 _camPreset = CAM_PRESETS[readCameraSetting()] || CAM_PRESETS.classic;
                 _theme = readThemeSetting();
                 _bgStyle = readBgStyleSetting();
@@ -4304,19 +4329,10 @@
                             _sharpMode = d.sharpMode;
                             _rebuildChartGeometry();
                         }
-                        if (d && HAND_FILTERS.indexOf(d.handFilter) !== -1) {
-                            _handFilter = d.handFilter;
-                            if (_notation) {
-                                const curTime = _latestTime;
-                                _notation.playable = filterNotationByHand(
-                                    _notation.masteryPlayable, _handFilter);
-                                buildNoteMeshes();
-                                _resetScoring();
-                                // same as the mastery path: resume the sweep
-                                // where playback is now — notes already
-                                // elapsed must not re-sweep as misses
-                                _anchorMissSweep(curTime);
-                            }
+                        // A per-instance override (splitscreen panel) wins
+                        // over the global Settings value.
+                        if (d && HAND_FILTERS.indexOf(d.handFilter) !== -1 && !_handOverride) {
+                            _setHandFilter(d.handFilter);
                         }
                         if (d && d.camera && CAM_PRESETS[d.camera]) {
                             _camPreset = CAM_PRESETS[d.camera];
@@ -4487,6 +4503,22 @@
                 _lastHwW = 0; _lastHwH = 0;
                 _appliedW = 0; _appliedH = 0;
                 highwayCanvas = null;
+            },
+
+            // ── Per-instance settings (plugin.json
+            // capabilities.visualization.settings, feedBack#849) ──
+            applySetting(key, value) {
+                if (key !== 'handFilter') return;
+                _handOverride = HAND_FILTERS.indexOf(value) !== -1 ? value : null;
+                _setHandFilter(_handOverride || readHandFilterSetting());
+            },
+            // Returns the EFFECTIVE value so a host can render its control.
+            // The contract has no "follow global" signal, so a host that
+            // restores from getSetting() and re-applies it pins an override
+            // equal to the current global; that instance then ignores later
+            // global Settings changes until the host clears it.
+            getSetting(key) {
+                return key === 'handFilter' ? _handFilter : undefined;
             },
 
             // ── Module MIDI router surface (focused-instance dispatch) ──

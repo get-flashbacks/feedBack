@@ -52,6 +52,33 @@ Set these in `docker-compose.yml` or the environment:
 | `APP_SOURCE_URL` | Overrides the Settings → About source link |
 | `APP_LICENSE_URL` | Overrides the licence link — set this explicitly if you host on a non-GitHub forge |
 
+### Reverse proxies
+
+FeedBack is meant to be reached directly — over the LAN, or through a VPN into
+your own network. The LAN-share relay (`/ws/sync/…`, used by Split Screen)
+caps how fast one address may open connections. No feedBack code reads a
+client-IP header: the cap is keyed on `websocket.client.host`, the client
+address the ASGI layer hands the app — the connecting proxy's address unless
+the server's proxy-header middleware rewrites it. So whether clients keep
+separate buckets comes down to the topology:
+
+- **Proxy on the same host as feedBack** — uvicorn applies `X-Forwarded-For`
+  from an address it trusts, `127.0.0.1` by default (recent versions add
+  `::1`), so a proxy on IPv4 loopback gives every client its own bucket. Set
+  `FORWARDED_ALLOW_IPS` if it connects over `::1` or from another address you
+  trust, and make sure it *overwrites* the header rather than appending to it.
+- **Proxy reaching feedBack from an address it doesn't trust** — a tunnel or
+  gateway on another machine, say. The header is ignored, so every client
+  behind it shares one bucket and a join storm big enough to exhaust that
+  shared budget is turned away before it reaches the room. That budget is sized
+  for a full room's worth of near-simultaneous joins, which covers ordinary
+  reconnect bursts; for a larger deployment, move the proxy onto the feedBack
+  host or widen the cap (`lib/routers/ws_sync.py`, `CONN_BURST`).
+
+Nothing else in feedBack distinguishes clients by address, so a proxy that
+doesn't preserve the client address costs the relay its per-client rate
+accounting — not its functionality.
+
 ---
 
 ## Song formats
@@ -105,8 +132,10 @@ The contracts are documented in [CLAUDE.md](CLAUDE.md), with deeper guides in
 [docs/](docs/) — see [plugin-v3-ui.md](docs/plugin-v3-ui.md),
 [plugin-styles.md](docs/plugin-styles.md),
 [plugin-modules.md](docs/plugin-modules.md),
-[plugin-panes.md](docs/plugin-panes.md), and
-[capability-recipes.md](docs/capability-recipes.md).
+[plugin-panes.md](docs/plugin-panes.md),
+[capability-recipes.md](docs/capability-recipes.md), and
+[compatibility.md](docs/compatibility.md) (which host commit each plugin
+feature needs, pinned by hash rather than version string).
 
 ---
 

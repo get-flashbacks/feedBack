@@ -6,7 +6,7 @@ cloudscraper>=1.2.71
 curl_cffi>=0.7.0
 midiutil>=1.2.1
 mido>=1.3.0
-Pillow>=10.0.0
+Pillow>=12.3.0
 PyYAML>=6.0
 python-multipart>=0.0.9
 structlog>=24.1.0
@@ -19,7 +19,7 @@ yt-dlp>=2025.1.1
 # remote Demucs / WhisperX servers. Currently transitively pulled by
 # cloudscraper, but declaring it explicitly avoids breakage if that
 # transitive dep ever changes upstream.
-requests>=2.31
+requests>=2.34.2
 
 # Hard dependency of anyio (FastAPI/Starlette's async layer): anyio imports it
 # lazily, so `import anyio` succeeds without it but the server crashes with
@@ -32,7 +32,8 @@ sniffio>=1.3.1
 
 # Hardened XML parsing for untrusted GP/arrangement imports (security audit,
 # issue #45) — guards xml.etree.ElementTree's entity-expansion ("billion
-# laughs") DoS. Used by lib/safe_xml.py, lib/gp8_audio_sync.py, and
-# lib/gp_autosync.py, all of which fall back to stdlib xml.etree with a
-# logged warning if this is somehow absent at runtime.
+# laughs") DoS. lib/safe_xml.py is the single entry point every untrusted-XML
+# parse call site (lib/gp2rs_gpx.py, lib/gp8_audio_sync.py, lib/gp_autosync.py,
+# lib/loosefolder.py, lib/song.py, lib/routers/ws_highway.py) delegates to,
+# rather than each parsing independently.
 defusedxml>=0.7.1

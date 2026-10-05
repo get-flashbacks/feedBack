@@ -23,7 +23,7 @@
 #   FORCE_REBUILD=1     Delete an existing rootfs without prompting (for CI)
 #
 # Prerequisites (install in WSL):
-#   sudo apt install debootstrap systemd-container tar zstd curl unzip git
+#   sudo apt install debootstrap systemd-container tar zstd curl unzip git python3
 #
 # On Proxmox, after transfer:
 #   pct restore <VMID> feedBack-ct.tar.zst --storage local-lvm --rootfs 8 --unprivileged 1
@@ -90,14 +90,16 @@ VGMSTREAM_REPO="https://github.com/vgmstream/vgmstream.git"
 # Static ffmpeg binaries from BtbN/FFmpeg-Builds (GPL, 7.1 series).
 # To bump: pick a new autobuild-* tag from
 #   https://github.com/BtbN/FFmpeg-Builds/releases
-# download the two linux gpl-7.1 tarballs, re-run
+# that still publishes 7.1 GPL linux builds, download the two
+# linux gpl-7.1 tarballs, re-run
 #   sha256sum ffmpeg-*-linux{64,arm64}-gpl-7.1.tar.xz
 # and update FFMPEG_RELEASE + both builds + hashes below.
-FFMPEG_RELEASE="autobuild-2026-06-01-15-02"
-FFMPEG_BUILD_AMD64="ffmpeg-n7.1.4-7-gadcf20da26-linux64-gpl-7.1.tar.xz"
-FFMPEG_BUILD_ARM64="ffmpeg-n7.1.4-7-gadcf20da26-linuxarm64-gpl-7.1.tar.xz"
-FFMPEG_SHA256_AMD64=afde55344990650c117fbb7cb36b38d2ab6790b06beb06a9c43a9300c9ce277a
-FFMPEG_SHA256_ARM64=03c8a7d9a7cf48d017a22a7c31acfdc8e76c5cb193923f883b0338c7baf0bd28
+# MUST match the Dockerfile's ffmpeg pins (same release + hashes).
+FFMPEG_RELEASE="autobuild-2026-07-31-14-10"
+FFMPEG_BUILD_AMD64="ffmpeg-n7.1.5-12-g1fdbca85aa-linux64-gpl-7.1.tar.xz"
+FFMPEG_BUILD_ARM64="ffmpeg-n7.1.5-12-g1fdbca85aa-linuxarm64-gpl-7.1.tar.xz"
+FFMPEG_SHA256_AMD64=c1e6caf48923dd8e6bc5e54d51ba70c321175b8162ae9c414c392990e72f0e79
+FFMPEG_SHA256_ARM64=a9a50c5782ef5e45306d58d1a9a819015b472d8da30ab6a77f15f571c861a71b
 
 APP_DIR="/app"
 VENV_DIR="/opt/app-venv"
@@ -185,16 +187,21 @@ if [[ "$TARGETARCH" == "arm64" && "$(uname -m)" != "aarch64" ]]; then
 fi
 
 # Confirm required tools
-for cmd in debootstrap systemd-nspawn curl unzip git tar zstd; do
-  command -v "$cmd" &>/dev/null || die "'$cmd' not found. Run: sudo apt install debootstrap systemd-container curl unzip git tar zstd"
+for cmd in debootstrap systemd-nspawn curl unzip git tar zstd python3; do
+  command -v "$cmd" &>/dev/null || die "'$cmd' not found. Run: sudo apt install debootstrap systemd-container curl unzip git tar zstd python3"
 done
 
 # =============================================================================
 # Pre-flight: verify the pinned BtbN FFmpeg release still exists
 # =============================================================================
-# BtbN only keeps ~10 days of autobuilds. A stale FFMPEG_RELEASE means
-# the build will 404 deep into step 5b after significant setup work.
-# Fail fast with actionable instructions instead.
+# BtbN keeps month-end autobuilds for two years (its README "Release
+# Retention Policy"), so FFMPEG_RELEASE below is a month-end tag with a
+# ~2-year lifetime. It still needs this check: the tag is deleted without
+# notice when the window closes, and also disappears early if a rename or
+# a publication gap ever removes the 7.1 GPL linux assets from a release
+# that is otherwise still listed. A stale FFMPEG_RELEASE means the build
+# will 404 deep into step 5b after significant setup work, so fail fast
+# with actionable instructions instead.
 info "Checking ffmpeg release availability …"
 case "$TARGETARCH" in
   arm64) _preflight_tarball="${FFMPEG_BUILD_ARM64}" ;;
@@ -207,23 +214,30 @@ if [[ ! "$_http_code" =~ ^2[0-9]{2}$ ]]; then
 
        URL: ${_preflight_url}
 
-       BtbN/FFmpeg-Builds only keeps ~10 days of autobuilds.
+       BtbN/FFmpeg-Builds keeps the last build of each month for two
+       years, and only publishes a series while it is current — the
+       7.1 GPL linux assets may be gone from newer tags.
        To fix, update these variables in build-proxmox-ct.sh:
 
-         1. Pick a current release tag from:
+         1. Pick a month-end release tag (autobuild-YYYY-MM-DD-HH-MM)
+            that still publishes the GPL linux builds you want:
             https://github.com/BtbN/FFmpeg-Builds/releases
 
-         2. Update FFMPEG_RELEASE to the new tag
-            (e.g. autobuild-YYYY-MM-DD-HH-MM)
+         2. Update FFMPEG_RELEASE to that tag
 
          3. Update FFMPEG_BUILD_AMD64 and FFMPEG_BUILD_ARM64
-            to the new *-linux64-gpl-7.1.tar.xz and
-            *-linuxarm64-gpl-7.1.tar.xz filenames
+            to that release's filenames, e.g.
+            ffmpeg-n7.1.5-12-g1fdbca85aa-linux64-gpl-7.1.tar.xz
+            ffmpeg-n7.1.5-12-g1fdbca85aa-linuxarm64-gpl-7.1.tar.xz
+            (a name containing -latest- floats; use the
+            versioned -g<commit> name)
 
          4. Update FFMPEG_SHA256_AMD64 and FFMPEG_SHA256_ARM64
             from the checksums.sha256 file in that release
 
-       Also update the same ARGs in Dockerfile"
+       Also update the same five ARGs in the Dockerfile (stage 1c and
+       the final stage's labels). CI (tools/check_docker_pins.py)
+       fails the build if the two files disagree."
 fi
 ok "ffmpeg release verified (HTTP ${_http_code})."
 
@@ -453,6 +467,18 @@ for d in lib static plugins; do
     warn "  Local '${d}/' not found – skipping."
   fi
 done
+
+# The starter seeder reads these packs from APP_DIR/content/starter/.
+starter_source_list=$(PYTHONPATH=lib python3 -c 'from builtin_content import BUILTIN_STARTER_SOURCES; print(*(rel for _, rel in BUILTIN_STARTER_SOURCES), sep="\n")') \
+  || die "Failed to read BUILTIN_STARTER_SOURCES with host python3."
+[[ -n "$starter_source_list" ]] || die "No starter packs listed in BUILTIN_STARTER_SOURCES."
+mapfile -t starter_sources <<< "$starter_source_list"
+for source in "${starter_sources[@]}"; do
+  [[ -f "$source" ]] || die "Starter pack source missing: $source"
+done
+mkdir -p "${ROOTFS}${APP_DIR}/content/starter"
+cp "${starter_sources[@]}" "${ROOTFS}${APP_DIR}/content/starter/"
+info "  Copied ${#starter_sources[@]} starter pack(s)"
 
 for f in requirements.txt server.py VERSION main.py tailwind.config.js; do
   if [[ -f "$f" ]]; then
