@@ -2339,7 +2339,7 @@ def convert_vocal_track(
                         continue
 
                     voice_time = current_time
-                    vocals_before = len(raw_vocals)
+                    voice_claimed = False
                     for beat_id in voice.findtext('Beats', '').split():
                         beat_el = beats_dict.get(beat_id)
                         if beat_el is None:
@@ -2385,6 +2385,7 @@ def convert_vocal_track(
                                                 (voice_time + audio_offset + dur) - raw_vocals[-1]['time']
                                             ),
                                         )
+                                        voice_claimed = True
                                     # Do NOT advance voice_time here — the
                                     # beat-end `voice_time += dur` below advances
                                     # exactly once per beat. Incrementing here too
@@ -2413,11 +2414,12 @@ def convert_vocal_track(
                                     'note': midi_note,
                                     'is_tie_origin': is_tie_origin,
                                 })
+                                voice_claimed = True
 
                         voice_time += dur
 
-                    # Only the first *lyric-bearing* voice in a bar feeds the
-                    # vocal timeline: some tabs put a second, genuinely
+                    # Only the first voice in a bar that *claims* the vocal
+                    # timeline feeds it: some tabs put a second, genuinely
                     # different simultaneous lyric line in a bar's second GP
                     # voice (e.g. an overlapping duet echo) rather than a
                     # silent alternate-rhythm layer, and appending both
@@ -2425,10 +2427,11 @@ def convert_vocal_track(
                     # out-of-order, overlapping token stream instead of two
                     # coherent lines. Until there's a multi-voice output
                     # shape, drop the second+ voice rather than corrupt the
-                    # primary one. A lyric-less voice is still traversed
-                    # first, so a silent leading layer can't hide the voice
-                    # that does carry the words (feedBack#103).
-                    if len(raw_vocals) > vocals_before:
+                    # primary one. A voice claims the timeline by appending a
+                    # syllable or by tying the previous one across the bar, so
+                    # a silent leading layer still falls through to the voice
+                    # that carries the words (feedBack#103).
+                    if voice_claimed:
                         break
 
         current_time += bar_duration

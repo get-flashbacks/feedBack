@@ -1476,3 +1476,53 @@ def test_convert_vocal_track_drops_second_voice_lyrics():
         0, [mb], bars, voices, beats, notes, rhythms)
     lyrics = [v.get('lyric') for v in safe_fromstring(out).findall('vocal')]
     assert lyrics == ['hel']
+
+
+def test_convert_vocal_track_drops_second_voice_after_a_tie_extension():
+    """A voice whose only contribution is a tie extension still owns the bar.
+
+    Bar 0 sings "hel" on a tie origin; bar 1's first voice just ties that note
+    across the bar line, and its second voice carries "lo". Tying extended "hel"
+    over the whole of bar 1, so appending "lo" at the bar start reproduced the
+    overlap the guard above exists to remove — and it did, because the tie
+    appends no token of its own.
+    """
+    masterbars = [
+        safe_fromstring('<MasterBar><Time>4/4</Time><Bars>0</Bars></MasterBar>'),
+        safe_fromstring('<MasterBar><Time>4/4</Time><Bars>1</Bars></MasterBar>'),
+    ]
+    bars = {
+        '0': safe_fromstring('<Bar><Voices>0</Voices></Bar>'),
+        '1': safe_fromstring('<Bar><Voices>1 2</Voices></Bar>'),
+    }
+    voices = {
+        '0': safe_fromstring('<Voice><Beats>0</Beats></Voice>'),
+        '1': safe_fromstring('<Voice><Beats>1</Beats></Voice>'),
+        '2': safe_fromstring('<Voice><Beats>2</Beats></Voice>'),
+    }
+    beats = {
+        '0': safe_fromstring(
+            '<Beat><Rhythm ref="0"/><Lyrics><Line>hel</Line></Lyrics><Notes>0</Notes></Beat>'),
+        '1': safe_fromstring('<Beat><Rhythm ref="0"/><Notes>1</Notes></Beat>'),
+        '2': safe_fromstring(
+            '<Beat><Rhythm ref="0"/><Lyrics><Line>lo</Line></Lyrics><Notes>0</Notes></Beat>'),
+    }
+    notes = {
+        '0': safe_fromstring(
+            '<Note><Tie origin="true"/><Properties>'
+            '<Property name="String"><String>0</String></Property>'
+            '<Property name="Fret"><Fret>5</Fret></Property></Properties></Note>'),
+        '1': safe_fromstring(
+            '<Note><Tie destination="true"/><Properties>'
+            '<Property name="String"><String>0</String></Property>'
+            '<Property name="Fret"><Fret>5</Fret></Property></Properties></Note>'),
+    }
+    rhythms = {'0': safe_fromstring('<Rhythm><NoteValue>Whole</NoteValue></Rhythm>')}
+    out = convert_vocal_track(
+        safe_fromstring('<GPIF><MasterBars/></GPIF>'),
+        {'string_pitches': [64, 59, 55, 50, 45, 40]},
+        0, masterbars, bars, voices, beats, notes, rhythms)
+    vocals = safe_fromstring(out).findall('vocal')
+    assert [v.get('lyric') for v in vocals] == ['hel']
+    # The tie extension still happens — it just no longer leaves the bar open.
+    assert float(vocals[0].get('length')) == pytest.approx(4.0)
