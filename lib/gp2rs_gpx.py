@@ -2339,6 +2339,7 @@ def convert_vocal_track(
                         continue
 
                     voice_time = current_time
+                    vocals_before = len(raw_vocals)
                     for beat_id in voice.findtext('Beats', '').split():
                         beat_el = beats_dict.get(beat_id)
                         if beat_el is None:
@@ -2415,18 +2416,20 @@ def convert_vocal_track(
 
                         voice_time += dur
 
-                    # Only the first active voice in a bar feeds the vocal
-                    # timeline. Some tabs put a second, genuinely-different
-                    # simultaneous lyric line in a bar's second GP voice
-                    # (e.g. an overlapping duet echo) rather than a silent
-                    # alternate-rhythm layer. A single flat lyric timeline
-                    # can't represent two simultaneous phrases — appending
-                    # both voices' beats in voice order (the old behavior)
-                    # produced an out-of-order, overlapping token stream
-                    # instead of two coherent lines. Until there's a
-                    # multi-voice output shape, drop the second+ voice
-                    # rather than corrupt the primary one.
-                    break
+                    # Only the first *lyric-bearing* voice in a bar feeds the
+                    # vocal timeline: some tabs put a second, genuinely
+                    # different simultaneous lyric line in a bar's second GP
+                    # voice (e.g. an overlapping duet echo) rather than a
+                    # silent alternate-rhythm layer, and appending both
+                    # voices' beats to one flat timeline yields an
+                    # out-of-order, overlapping token stream instead of two
+                    # coherent lines. Until there's a multi-voice output
+                    # shape, drop the second+ voice rather than corrupt the
+                    # primary one. A lyric-less voice is still traversed
+                    # first, so a silent leading layer can't hide the voice
+                    # that does carry the words (feedBack#103).
+                    if len(raw_vocals) > vocals_before:
+                        break
 
         current_time += bar_duration
 

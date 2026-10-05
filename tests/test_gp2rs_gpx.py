@@ -1447,3 +1447,32 @@ def test_convert_vocal_track_keeps_lyrics_when_first_voice_is_silent():
         0, [mb], bars, voices, beats, notes, rhythms)
     assert 'count="1"' in out
     assert 'lyric="hello"' in out
+
+
+def test_convert_vocal_track_drops_second_voice_lyrics():
+    """The counterpart of the silent-first-voice case above: once a voice has
+    contributed syllables, the bar's later voices are dropped — appending them
+    produced an out-of-order, overlapping token stream the flat timeline can't
+    represent."""
+    mb = safe_fromstring('<MasterBar><Time>4/4</Time><Bars>0</Bars></MasterBar>')
+    bars = {'0': safe_fromstring('<Bar><Voices>0 1</Voices></Bar>')}
+    voices = {
+        '0': safe_fromstring('<Voice><Beats>0</Beats></Voice>'),
+        '1': safe_fromstring('<Voice><Beats>1</Beats></Voice>'),
+    }
+    beats = {
+        '0': safe_fromstring(
+            '<Beat><Rhythm ref="0"/><Lyrics><Line>hel</Line></Lyrics><Notes>0</Notes></Beat>'),
+        '1': safe_fromstring(
+            '<Beat><Rhythm ref="0"/><Lyrics><Line>lo</Line></Lyrics><Notes>0</Notes></Beat>'),
+    }
+    notes = {'0': safe_fromstring(
+        '<Note><Properties><Property name="String"><String>0</String></Property>'
+        '<Property name="Fret"><Fret>5</Fret></Property></Properties></Note>')}
+    rhythms = {'0': safe_fromstring('<Rhythm><NoteValue>Quarter</NoteValue></Rhythm>')}
+    out = convert_vocal_track(
+        safe_fromstring('<GPIF><MasterBars/></GPIF>'),
+        {'string_pitches': [64, 59, 55, 50, 45, 40]},
+        0, [mb], bars, voices, beats, notes, rhythms)
+    lyrics = [v.get('lyric') for v in safe_fromstring(out).findall('vocal')]
+    assert lyrics == ['hel']
