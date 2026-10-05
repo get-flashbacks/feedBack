@@ -132,8 +132,10 @@ The contracts are documented in [CLAUDE.md](CLAUDE.md), with deeper guides in
 [docs/](docs/) — see [plugin-v3-ui.md](docs/plugin-v3-ui.md),
 [plugin-styles.md](docs/plugin-styles.md),
 [plugin-modules.md](docs/plugin-modules.md),
-[plugin-panes.md](docs/plugin-panes.md), and
-[capability-recipes.md](docs/capability-recipes.md).
+[plugin-panes.md](docs/plugin-panes.md),
+[capability-recipes.md](docs/capability-recipes.md), and
+[compatibility.md](docs/compatibility.md) (which host commit each plugin
+feature needs, pinned by hash rather than version string).
 
 ---
 

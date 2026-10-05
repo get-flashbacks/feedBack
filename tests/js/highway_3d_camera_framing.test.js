@@ -148,8 +148,8 @@ test('the curDist lerp target applies the fit-guard dolly boost', () => {
     // The span-driven tgtDist still owns zooming in; the boost only pulls back.
     assert.match(
         src,
-        /curDist\s*\+=\s*\(\s*tgtDist\s*\*\s*_fretRowFitBoost\s*-\s*curDist\s*\)\s*\*\s*lerp/,
-        'curDist must lerp toward tgtDist * _fretRowFitBoost',
+        /curDist\s*\+=\s*\(\s*tgtDist\s*\*\s*_fretRowFitBoost\s*\*\s*_viewZoomMul\s*-\s*curDist\s*\)\s*\*\s*lerp/,
+        'curDist must lerp toward tgtDist * _fretRowFitBoost * _viewZoomMul',
     );
 });
 
