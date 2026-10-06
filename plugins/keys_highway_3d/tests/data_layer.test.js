@@ -370,3 +370,133 @@ test('_pickMidiTarget: recovery with no preference at all still allows a first-h
     const target = _pickMidiTarget(inputs, null, null, false);
     assert.equal(target.id, 'b');
 });
+
+/* ── updateScene's draw window (feedBack#95) ───────────────────────────── */
+
+test('noteWindowAheadS: the bound is exactly where a note front edge leaves the runway', () => {
+    const { noteWindowAheadS, scrollZ, TS } = load();
+    const highwayLen = 8.625, hitZ = -0.1725;
+    const ahead = noteWindowAheadS(highwayLen, hitZ);
+    // scrollZ positions the note front at its onset; the runway hides the
+    // note once frontZ < -highwayLen. The bound must sit exactly on that
+    // crossing (at the module's TS — the speed updateScene scrolls at).
+    assert.ok(Math.abs(scrollZ(ahead, 0, hitZ, TS) - (-highwayLen)) < 1e-9);
+    assert.ok(scrollZ(ahead - 1e-6, 0, hitZ, TS) > -highwayLen);  // just inside: on the runway
+    assert.ok(scrollZ(ahead + 1e-6, 0, hitZ, TS) < -highwayLen);  // just past: off it
+    assert.ok(ahead > 0);
+});
+
+test('noteWindowBehindS: covers the longest note\'s consumption AND the label fade', () => {
+    const { noteWindowBehindS, TS, LABEL_FADE_DIST } = load();
+    // Long-note case binds: a 4-second note is still being consumed 4 s
+    // after its onset, so the window must reach at least that far back.
+    const maxLen = 4 * TS;
+    assert.ok(noteWindowBehindS(maxLen) * TS >= maxLen);
+    // Short-note case binds the label: a note consumed in one frame still
+    // shows its name for LABEL_FADE_DIST past the hit-line — a bound built
+    // from note length alone ((0 + 20K)/TS) would cut the label off early.
+    assert.ok(noteWindowBehindS(0) * TS >= LABEL_FADE_DIST);
+    // Tightness: beyond the label floor the bound tracks only the longest
+    // note — it must not grow with the chart's length or total entry count.
+    assert.ok(noteWindowBehindS(maxLen) * TS <= maxLen + LABEL_FADE_DIST);
+    // Monotone: a longer chart note only ever widens the window.
+    let prev = -Infinity;
+    for (let len = 0; len <= 60; len += 0.25) {
+        const behind = noteWindowBehindS(len);
+        assert.ok(behind >= prev);
+        assert.ok(behind > 0);
+        prev = behind;
+    }
+});
+
+test('the note window contains every filter band updateScene runs inside it', () => {
+    const { noteWindowAheadS, noteWindowBehindS } = load();
+    // updateScene's camera framing keeps only dt ∈ [-0.4, CAM_ZOOM_AHEAD]
+    // and its key-approach glow dt ∈ [-0.05, KEY_GLOW_AHEAD]; both filters
+    // run inside the window slices, so a band edge that crept outside the
+    // window would silently truncate the filter while everything else stayed
+    // green. Stock literals mirror screen.js: 0.4 (camera lag, hardcoded at
+    // the call site), CAM_ZOOM_AHEAD = 3.5, KEY_GLOW_AHEAD = 2.0.
+    assert.ok(noteWindowBehindS(0) >= 0.4);
+    assert.ok(noteWindowBehindS(0) >= 0.05);
+    // Stock geometry: HIGHWAY_LEN = 1150*K = 8.625, hitZ = -WHITE_L/2 = -0.1725.
+    const ahead = noteWindowAheadS(8.625, -0.1725);
+    assert.ok(ahead >= 3.5);  // CAM_ZOOM_AHEAD's far edge; also covers the glow's 2.0
+});
+
+test('advanceTWindow: a fresh window claims its slice without hiding anything', () => {
+    const { advanceTWindow, _noteMeshT } = load();
+    const entries = [0, 1, 2, 3, 4].map(t => ({ note: { t } }));
+    const win = { lo: -1, hi: -1 };
+    const hidden = [];
+    advanceTWindow(_noteMeshT, entries, 1.5, 3.5, win, (lo, hi) => hidden.push([lo, hi]));
+    // Entries start hidden after a rebuild, so the first claim hides nothing.
+    assert.deepEqual(hidden, []);
+    assert.deepEqual([win.lo, win.hi], [2, 4]);  // t ∈ [1.5, 3.5] → entries 2..3
+});
+
+test('advanceTWindow: steady playback hides only the run that fell out behind', () => {
+    const { advanceTWindow, _noteMeshT } = load();
+    const entries = [0, 1, 2, 3, 4, 5].map(t => ({ note: { t } }));
+    const win = { lo: -1, hi: -1 };
+    const hidden = [];
+    advanceTWindow(_noteMeshT, entries, 1.5, 3.5, win, (lo, hi) => hidden.push([lo, hi]));
+    hidden.length = 0;
+    advanceTWindow(_noteMeshT, entries, 2.5, 4.5, win, (lo, hi) => hidden.push([lo, hi]));
+    assert.deepEqual(hidden, [[2, 3]]);  // only t=2 fell out behind; nothing left ahead
+    assert.deepEqual([win.lo, win.hi], [3, 5]);  // t ∈ [2.5, 4.5] → entries 3..4
+});
+
+test('advanceTWindow: a forward seek hides its jumped-past window; a rewind re-claims it', () => {
+    const { advanceTWindow, _noteMeshT } = load();
+    const entries = [0, 1, 2, 3, 4, 5].map(t => ({ note: { t } }));
+    const win = { lo: -1, hi: -1 };
+    const hidden = [];
+    advanceTWindow(_noteMeshT, entries, 0.5, 2.5, win, (lo, hi) => hidden.push([lo, hi]));
+    hidden.length = 0;
+    // Forward seek past the chart end: window collapses to [6, 6) and the
+    // whole old front falls behind. The hide range runs to the new lo, which
+    // sweeps up entries that were already hidden (re-hiding is idempotent)
+    // — that keeps "everything below lo is hidden" a single enforced rule.
+    advanceTWindow(_noteMeshT, entries, 9.5, 11.5, win, (lo, hi) => hidden.push([lo, hi]));
+    assert.deepEqual(hidden, [[1, 6]]);
+    assert.deepEqual([win.lo, win.hi], [6, 6]);
+    // Rewind back over previously visited territory: the old window was
+    // empty so its lower edge hides nothing; the entries that re-enter
+    // below lo belong to the caller to process, never to onHide. Everything
+    // the shrunk upper edge outruns is (already-hidden) ahead-of-window
+    // entries — hidden again, harmlessly.
+    hidden.length = 0;
+    advanceTWindow(_noteMeshT, entries, 0.5, 2.5, win, (lo, hi) => hidden.push([lo, hi]));
+    assert.deepEqual(hidden, [[3, 6]]);
+    assert.deepEqual([win.lo, win.hi], [1, 3]);
+});
+
+test('advanceTWindow: same-onset entries (chords) enter and leave as one run', () => {
+    const { advanceTWindow, _noteMeshT } = load();
+    const entries = [
+        { note: { t: 0 } },
+        { note: { t: 1 } }, { note: { t: 1 } }, { note: { t: 1 } },
+        { note: { t: 2 } },
+    ];
+    const win = { lo: -1, hi: -1 };
+    const hidden = [];
+    advanceTWindow(_noteMeshT, entries, 1, 1, win, (lo, hi) => hidden.push([lo, hi]));
+    assert.deepEqual([win.lo, win.hi], [1, 4]);  // exact-boundary ties all claimed
+    advanceTWindow(_noteMeshT, entries, 1.001, 5, win, (lo, hi) => hidden.push([lo, hi]));
+    assert.deepEqual(hidden, [[1, 4]]);          // all three leave together, never split
+});
+
+test('advanceTWindow: the marker keyOf reads entry.t; empty arrays collapse', () => {
+    const { advanceTWindow, _markerT } = load();
+    const entries = [{ sprite: {}, t: 5 }, { sprite: {}, t: 7 }];
+    const win = { lo: -1, hi: -1 };
+    advanceTWindow(_markerT, entries, 4, 6, win,
+        () => { throw new Error('a fresh window must not hide'); });
+    assert.deepEqual([win.lo, win.hi], [0, 1]);
+    const empty = { lo: -1, hi: -1 };
+    advanceTWindow(_markerT, [], 0, 1, empty, () => {
+        throw new Error('an empty chart must not hide');
+    });
+    assert.deepEqual([empty.lo, empty.hi], [0, 0]);
+});

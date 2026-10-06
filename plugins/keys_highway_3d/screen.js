@@ -632,6 +632,91 @@
     }
 
     /* ======================================================================
+     *  updateScene's draw window (feedBack#95)
+     * ====================================================================== */
+
+    // updateScene walks only the t-sorted entries whose onset sits inside
+    // [now - behind, now + ahead]: past `ahead` a note's front edge has
+    // scrolled off the far end of the runway, and past `behind` it has been
+    // fully consumed and its name label has finished fading. Per-frame cost
+    // then tracks the span on screen, not the chart's length. Both bounds
+    // are seconds relative to `now`, and at stock geometry the window is
+    // [~-0.62, ~8.67]s — wide enough to contain every span updateScene
+    // filters on inside it (the camera framing band [-0.4, CAM_ZOOM_AHEAD]
+    // and the key-approach glow [-0.05, KEY_GLOW_AHEAD]), so those filters
+    // keep their exact old behaviour. That containment is pinned against
+    // stock literals by the window-band test in data_layer.test.js.
+
+    // Far end: the front edge (hitZ - dt*TS, see scrollZ) reaches -highwayLen
+    // exactly at dt = (highwayLen + hitZ) / TS — the time-domain equivalent
+    // of updateScene's `frontZ < -HIGHWAY_LEN` hide. hitZ sits slightly on
+    // the -Z side of the origin, so this lands just under highwayLen/TS.
+    function noteWindowAheadS(highwayLen, hitZ) {
+        return (highwayLen + hitZ) / TS;
+    }
+
+    // Linger margins: how far past the hit-line a consumed note / bar number
+    // is still drawn (updateScene's `backZ > hitZ + NOTE_LINGER` and `z >
+    // hitZ + MARKER_LINGER` hides). The window's near bound is built from
+    // these SAME constants — a loop hide check that grew without its bound
+    // would let the window evict entries while they were still drawable.
+    const NOTE_LINGER = 20 * K;
+    const MARKER_LINGER = 6 * K;
+
+    // Near end: whichever of the two lingerers outlasts the other — the
+    // note's own consumption (hidden once `len + NOTE_LINGER` world units
+    // have scrolled past the hit-line) or its name label (LABEL_FADE_DIST
+    // past the hit-line). Derived from the CHART's longest note, so the
+    // single shared bound covers every note's own exit; shorter notes simply
+    // leave the window later than they stop being drawn (the loop's
+    // per-entry geometry check hides them on the frames in between).
+    function noteWindowBehindS(maxNoteLen) {
+        return Math.max(LABEL_FADE_DIST, maxNoteLen + NOTE_LINGER) / TS;
+    }
+
+    // Bar numbers have no label and no length: one leaves the window
+    // MARKER_LINGER/TS seconds past its onset — the time it takes to scroll
+    // past `hitZ + MARKER_LINGER` (updateScene's marker hide).
+    const MARKER_WIN_BEHIND_S = MARKER_LINGER / TS;
+
+    // First index of the key-sorted `arr` at (`atOrAfter`) / past
+    // (`atOrAfter` false) `t`, by `keyOf`. Allocation-free binary search —
+    // the same shape as sweepStartIndex.
+    function _tBound(keyOf, arr, t, atOrAfter) {
+        let lo = 0, hi = arr.length;
+        while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (atOrAfter ? keyOf(arr[mid]) < t : keyOf(arr[mid]) <= t) lo = mid + 1;
+            else hi = mid;
+        }
+        return lo;
+    }
+
+    // Advance the cached window `win` ({lo, hi}) over the key-sorted
+    // `entries` to cover [tLo, tHi]. Entries that just fell out of the
+    // PREVIOUS window are reported through `onHide(lo, hi)` — the only
+    // entries whose drawn state went stale this frame: a note that has been
+    // hidden inside the window for a while is simply skipped, and an entry
+    // that merely ENTERS the window needs no callback because the caller
+    // processes it immediately after. `win.lo < 0` marks a fresh or rebuilt
+    // array, where every entry starts hidden and nothing needs hiding.
+    // Pure; exported for tests.
+    function advanceTWindow(keyOf, entries, tLo, tHi, win, onHide) {
+        const lo = _tBound(keyOf, entries, tLo, true);
+        const hi = _tBound(keyOf, entries, tHi, false);
+        if (win.lo >= 0) {
+            if (lo > win.lo) onHide(win.lo, lo);
+            if (hi < win.hi) onHide(hi, win.hi);
+        }
+        win.lo = lo;
+        win.hi = hi;
+    }
+
+    // Sort keys of the two t-sorted per-frame arrays updateScene windows.
+    const _noteMeshT = (entry) => entry.note.t;
+    const _markerT = (entry) => entry.t;
+
+    /* ======================================================================
      *  Pure scoring logic (exported via createFactory.__test)
      * ====================================================================== */
 
@@ -1914,8 +1999,15 @@
         let _camX = 0, _camTargetX = 0;  // camera x pan-follow state (updateScene)
         let _camZoom = 1, _camTargetZoom = 1;  // adaptive dolly-zoom to the note span
         let notesGroup = null, keyboardGroup = null, markersGroup = null, hitLine = null;
-        let noteMeshes = [];   // [{mesh, note, len}]
+        let noteMeshes = [];   // [{mesh, note, len, label}]
         let markerSprites = []; // [{sprite, t}]
+        // Draw-window cursors over the two t-sorted arrays above, advanced
+        // once per frame by advanceTWindow (feedBack#95). `lo < 0` marks a
+        // fresh or rebuilt array, whose entries all start hidden — the first
+        // frame after that hides nothing.
+        const _noteWin = { lo: -1, hi: -1 };
+        const _markerWin = { lo: -1, hi: -1 };
+        let _maxNoteLen = 0;    // longest `len` among noteMeshes — sets the note window's near edge
         let keyMeshes = new Map(); // midi → mesh
         let _isReady = false;
         // `masteryPlayable` excludes notes hidden by difficulty; `playable`
@@ -3313,6 +3405,8 @@
             _clearGroup(notesGroup);
             _clearNoteCaches();
             noteMeshes = [];
+            _maxNoteLen = 0;
+            _noteWin.lo = _noteWin.hi = -1;
             const range = _notation.range;
             const { layout, whiteCount } = keyLayout(range);
             // Mastery-filtered subset (feedBack#67) — falls back to every
@@ -3321,6 +3415,7 @@
                 const entry = layout.get(note.midi);
                 if (!entry) continue;
                 const len = Math.max(4 * K, note.durSec * TS);
+                if (len > _maxNoteLen) _maxNoteLen = len;
                 // Non-floating layouts: notes ride the naturals' plane and take
                 // their piano-shaped lane's width/centre. Floating (default):
                 // original elevated sharps, key-centred bars.
@@ -3381,6 +3476,7 @@
             _clearGroup(markersGroup);
             _clearBarTextures();
             markerSprites = [];
+            _markerWin.lo = _markerWin.hi = -1;
             const { whiteCount } = keyLayout(_notation.range);
             const totalW = whiteCount * WHITE_W;
             for (const marker of _notation.markers) {
@@ -3397,6 +3493,11 @@
                 markersGroup.add(sprite);
                 markerSprites.push({ sprite, t: marker.t });
             }
+            // advanceTWindow binary-searches this array by t. Measures stream
+            // in measure order, but making the sort an explicit invariant
+            // here (one build-time pass) keeps the window's correctness
+            // independent of how the server chunks its `markers` message.
+            markerSprites.sort((a, b) => a.t - b.t);
         }
 
         /* ── MIDI event handlers (called by module _midiOnMessage) ───────
@@ -3661,18 +3762,53 @@
             }
         }
 
+        // Entries that just slid out of the note window (feedBack#95): park
+        // them invisible. Their off-runway position/scale is left as it was
+        // — nothing reads it while hidden, and a re-entering note (a
+        // backward seek) is fully re-derived on its first processed frame.
+        function _hideNoteWindow(lo, hi) {
+            for (let i = lo; i < hi; i++) {
+                const entry = noteMeshes[i];
+                entry.mesh.visible = false;
+                if (entry.label) entry.label.visible = false;
+            }
+        }
+
+        // Same for the floating bar numbers, which have no label sprite.
+        function _hideMarkerWindow(lo, hi) {
+            for (let i = lo; i < hi; i++) markerSprites[i].sprite.visible = false;
+        }
+
         function updateScene(now) {
             // Rest emissive with the Glow slider applied — computed once so
             // the per-note '!==' guards stay effective at any glow value.
             const _restEmissive = NOTE_EMISSIVE_BASE * _glowMul();
             const hitZ = -WHITE_L / 2;
 
+            // Window both t-sorted arrays to what can still be drawn this
+            // frame (feedBack#95): entries that just fell out are hidden
+            // once, here, and the loops below walk only [lo, hi) — per-frame
+            // cost tracks the visible span, not the chart's length. The
+            // in-loop geometry checks stay (bounds are exact for markers and
+            // conservative for notes between the shared bound and each
+            // note's own exit).
+            advanceTWindow(_noteMeshT, noteMeshes,
+                now - noteWindowBehindS(_maxNoteLen),
+                now + noteWindowAheadS(HIGHWAY_LEN, hitZ),
+                _noteWin, _hideNoteWindow);
+            advanceTWindow(_markerT, markerSprites,
+                now - MARKER_WIN_BEHIND_S,
+                now + noteWindowAheadS(HIGHWAY_LEN, hitZ),
+                _markerWin, _hideMarkerWindow);
+
             // Pan the camera x to follow the active hand: a hit-line-weighted
             // centroid of the notes around `now`. Keeps a ~2-octave window
             // framed and scrolls with the melody, RS+-style, instead of
-            // statically framing the whole range.
+            // statically framing the whole range. Windowed to [lo, hi): the
+            // camera band ([-0.4, CAM_ZOOM_AHEAD]) sits inside the window.
             let minX = Infinity, maxX = -Infinity;
-            for (const { mesh, note } of noteMeshes) {
+            for (let i = _noteWin.lo; i < _noteWin.hi; i++) {
+                const { mesh, note } = noteMeshes[i];
                 const dt = note.t - now;
                 if (dt < -0.4 || dt > CAM_ZOOM_AHEAD) continue;
                 const x = mesh.position.x;
@@ -3718,7 +3854,8 @@
             }
 
             for (const km of keyMeshes.values()) km.userData.glow = 0;
-            for (const { mesh, note, len, label } of noteMeshes) {
+            for (let i = _noteWin.lo; i < _noteWin.hi; i++) {
+                const { mesh, note, len, label } = noteMeshes[i];
                 const dt = note.t - now;
                 // Key approach-glow: the nearest upcoming note lights its key,
                 // stronger the closer it is to the hit-line.
@@ -3758,7 +3895,7 @@
                     }
                 }
 
-                if (frontZ < -HIGHWAY_LEN || backZ > hitZ + 20 * K) {
+                if (frontZ < -HIGHWAY_LEN || backZ > hitZ + NOTE_LINGER) {
                     mesh.visible = false;
                     continue;
                 }
@@ -3791,9 +3928,10 @@
                 const g = km.userData.glow || 0;
                 km.material.emissiveIntensity = g * g * KEY_GLOW_STRENGTH * _glowMul(); // ease → pops near the hit-line
             }
-            for (const entry of markerSprites) {
+            for (let i = _markerWin.lo; i < _markerWin.hi; i++) {
+                const entry = markerSprites[i];
                 const z = scrollZ(entry.t, now, hitZ, TS);
-                if (z < -HIGHWAY_LEN || z > hitZ + 6 * K) {
+                if (z < -HIGHWAY_LEN || z > hitZ + MARKER_LINGER) {
                     entry.sprite.visible = false;
                     continue;
                 }
@@ -4242,6 +4380,11 @@
             _flamesGroup = null;
             noteMeshes = [];
             markerSprites = [];
+            // Fresh arrays start fully hidden — the first advanceTWindow after
+            // a rebuild must not try to hide entries from the old arrays.
+            _noteWin.lo = _noteWin.hi = -1;
+            _markerWin.lo = _markerWin.hi = -1;
+            _maxNoteLen = 0;
             keyMeshes = new Map();
             _layoutInfo = null;
             _keyAnim.clear();
@@ -4588,6 +4731,13 @@
         filterNotationByHand,
         noteLetter,
         scrollZ,
+        noteWindowAheadS,
+        noteWindowBehindS,
+        advanceTWindow,
+        _noteMeshT,
+        _markerT,
+        TS,
+        LABEL_FADE_DIST,
         noteKey,
         accuracyOf,
         scoreOf,
