@@ -13,6 +13,7 @@ import xml.etree.ElementTree as ET
 import pytest
 
 import gp2rs_gpx
+import safe_xml
 from gp2rs_gpx import convert_file, convert_vocal_track
 from safe_xml import safe_fromstring
 
@@ -37,6 +38,7 @@ from gp2rs_gpx import (
     _gpif_left_fingering,
     _gpif_pick_direction,
     _gpif_track_capo,
+    convert_vocal_track,
 )
 from gp2rs import RsNote
 
@@ -387,6 +389,73 @@ def test_vocal_pitch_sidecar_emits_lyric_note():
 def test_vocal_pitch_sidecar_skips_beat_without_lyric():
     out = convert_vocal_track_to_pitch_sidecar(**_vocal_sidecar_args(with_lyric=False))
     assert out == {"version": 1, "notes": []}
+
+
+# ── convert_vocal_track: runaway tie-extension cap ──────────────────────────
+# One bar, one voice, four whole-note beats (4.0 qn @ 120 BPM = 2.0 s each):
+# beat0 carries the lyric (tie origin), beats 1-3 are tie destinations with
+# no lyric of their own. Uncapped, three 2.0s tie extensions would stretch
+# the single syllable to 6.0s; _VOCAL_TIE_MAX_LENGTH_S bounds it at 5.0s.
+
+def _tie_chain_args(num_tie_beats: int):
+    def _note(nid: str, *, tie_destination: bool, tie_origin: bool = False):
+        tie_attrs = ''
+        if tie_destination:
+            tie_attrs = '<Tie destination="true"/>'
+        elif tie_origin:
+            tie_attrs = '<Tie origin="true"/>'
+        return safe_xml.safe_fromstring(
+            '<Note>'
+            '<Property name="String"><String>0</String></Property>'
+            '<Property name="Fret"><Fret>0</Fret></Property>'
+            f'{tie_attrs}'
+            '</Note>'
+        )
+
+    beat_ids = [str(i) for i in range(num_tie_beats + 1)]
+    beats_dict = {
+        beat_ids[0]: safe_xml.safe_fromstring(
+            '<Beat><Rhythm ref="rW"/><Lyrics><Line>la</Line></Lyrics><Notes>0</Notes></Beat>'
+        ),
+    }
+    notes_dict = {'0': _note('0', tie_destination=False, tie_origin=True)}
+    for i in range(1, num_tie_beats + 1):
+        beats_dict[beat_ids[i]] = safe_xml.safe_fromstring(
+            f'<Beat><Rhythm ref="rW"/><Notes>{i}</Notes></Beat>'
+        )
+        notes_dict[str(i)] = _note(str(i), tie_destination=True)
+
+    masterbar = safe_xml.safe_fromstring('<MasterBar><Time>4/4</Time><Bars>0</Bars></MasterBar>')
+    return dict(
+        root=safe_xml.safe_fromstring('<GPIF/>'),  # no MasterTrack -> 120 BPM
+        track={'string_pitches': [60]},
+        raw_idx=0,
+        masterbars=[masterbar],
+        bars_by_id={'0': safe_xml.safe_fromstring('<Bar><Voices>0</Voices></Bar>')},
+        voices_dict={'0': safe_xml.safe_fromstring(f'<Voice><Beats>{" ".join(beat_ids)}</Beats></Voice>')},
+        beats_dict=beats_dict,
+        notes_dict=notes_dict,
+        rhythms_dict={'rW': safe_xml.safe_fromstring('<Rhythm><NoteValue>Whole</NoteValue></Rhythm>')},
+    )
+
+
+def _vocal_length(xml_str):
+    root = safe_xml.safe_fromstring(xml_str)
+    vocal = root.find('vocal')
+    assert vocal is not None, xml_str
+    return float(vocal.get('length'))
+
+
+def test_vocal_tie_chain_extends_length_under_cap():
+    # One tie destination: 2.0s origin extended toward 4.0s, still under 5.0s cap.
+    out = convert_vocal_track(**_tie_chain_args(num_tie_beats=1))
+    assert _vocal_length(out) == pytest.approx(4.0)
+
+
+def test_vocal_tie_chain_caps_runaway_extension():
+    # Three tie destinations: uncapped this would reach 8.0s; capped at 5.0s.
+    out = convert_vocal_track(**_tie_chain_args(num_tie_beats=3))
+    assert _vocal_length(out) == pytest.approx(5.0)
 
 
 # ── _collect_tone_events ────────────────────────────────────────────────────
@@ -1378,3 +1447,124 @@ def test_convert_vocal_track_keeps_lyrics_when_first_voice_is_silent():
         0, [mb], bars, voices, beats, notes, rhythms)
     assert 'count="1"' in out
     assert 'lyric="hello"' in out
+
+
+def test_convert_vocal_track_drops_second_voice_lyrics():
+    """The counterpart of the silent-first-voice case above: once a voice has
+    contributed syllables, the bar's later voices are dropped — appending them
+    produced an out-of-order, overlapping token stream the flat timeline can't
+    represent."""
+    mb = safe_fromstring('<MasterBar><Time>4/4</Time><Bars>0</Bars></MasterBar>')
+    bars = {'0': safe_fromstring('<Bar><Voices>0 1</Voices></Bar>')}
+    voices = {
+        '0': safe_fromstring('<Voice><Beats>0</Beats></Voice>'),
+        '1': safe_fromstring('<Voice><Beats>1</Beats></Voice>'),
+    }
+    beats = {
+        '0': safe_fromstring(
+            '<Beat><Rhythm ref="0"/><Lyrics><Line>hel</Line></Lyrics><Notes>0</Notes></Beat>'),
+        '1': safe_fromstring(
+            '<Beat><Rhythm ref="0"/><Lyrics><Line>lo</Line></Lyrics><Notes>0</Notes></Beat>'),
+    }
+    notes = {'0': safe_fromstring(
+        '<Note><Properties><Property name="String"><String>0</String></Property>'
+        '<Property name="Fret"><Fret>5</Fret></Property></Properties></Note>')}
+    rhythms = {'0': safe_fromstring('<Rhythm><NoteValue>Quarter</NoteValue></Rhythm>')}
+    out = convert_vocal_track(
+        safe_fromstring('<GPIF><MasterBars/></GPIF>'),
+        {'string_pitches': [64, 59, 55, 50, 45, 40]},
+        0, [mb], bars, voices, beats, notes, rhythms)
+    lyrics = [v.get('lyric') for v in safe_fromstring(out).findall('vocal')]
+    assert lyrics == ['hel']
+
+
+def test_convert_vocal_track_drops_second_voice_after_a_tie_extension():
+    """A voice whose only contribution is a tie extension still owns the bar.
+
+    Bar 0 sings "hel" on a tie origin; bar 1's first voice just ties that note
+    across the bar line, and its second voice carries "lo". Tying extended "hel"
+    over the whole of bar 1, so appending "lo" at the bar start reproduced the
+    overlap the guard above exists to remove — and it did, because the tie
+    appends no token of its own.
+    """
+    masterbars = [
+        safe_fromstring('<MasterBar><Time>4/4</Time><Bars>0</Bars></MasterBar>'),
+        safe_fromstring('<MasterBar><Time>4/4</Time><Bars>1</Bars></MasterBar>'),
+    ]
+    bars = {
+        '0': safe_fromstring('<Bar><Voices>0</Voices></Bar>'),
+        '1': safe_fromstring('<Bar><Voices>1 2</Voices></Bar>'),
+    }
+    voices = {
+        '0': safe_fromstring('<Voice><Beats>0</Beats></Voice>'),
+        '1': safe_fromstring('<Voice><Beats>1</Beats></Voice>'),
+        '2': safe_fromstring('<Voice><Beats>2</Beats></Voice>'),
+    }
+    beats = {
+        '0': safe_fromstring(
+            '<Beat><Rhythm ref="0"/><Lyrics><Line>hel</Line></Lyrics><Notes>0</Notes></Beat>'),
+        '1': safe_fromstring('<Beat><Rhythm ref="0"/><Notes>1</Notes></Beat>'),
+        '2': safe_fromstring(
+            '<Beat><Rhythm ref="0"/><Lyrics><Line>lo</Line></Lyrics><Notes>0</Notes></Beat>'),
+    }
+    notes = {
+        '0': safe_fromstring(
+            '<Note><Tie origin="true"/><Properties>'
+            '<Property name="String"><String>0</String></Property>'
+            '<Property name="Fret"><Fret>5</Fret></Property></Properties></Note>'),
+        '1': safe_fromstring(
+            '<Note><Tie destination="true"/><Properties>'
+            '<Property name="String"><String>0</String></Property>'
+            '<Property name="Fret"><Fret>5</Fret></Property></Properties></Note>'),
+    }
+    rhythms = {'0': safe_fromstring('<Rhythm><NoteValue>Whole</NoteValue></Rhythm>')}
+    out = convert_vocal_track(
+        safe_fromstring('<GPIF><MasterBars/></GPIF>'),
+        {'string_pitches': [64, 59, 55, 50, 45, 40]},
+        0, masterbars, bars, voices, beats, notes, rhythms)
+    vocals = safe_fromstring(out).findall('vocal')
+    assert [v.get('lyric') for v in vocals] == ['hel']
+    # The tie extension still happens — it just no longer leaves the bar open.
+    assert float(vocals[0].get('length')) == pytest.approx(4.0)
+
+
+def test_convert_vocal_track_preserves_disjoint_second_voice():
+    """A second voice's lyric that doesn't overlap the selected vocal timeline
+    is kept and emitted in time order (feedBack#103 follow-up).
+
+    Bar 0: one 4/4 bar, 120 BPM → 2.0 s total.
+    Voice 0: beat 0 (quarter, [0.0, 0.5]) sings "hel"; beat 1 has no lyric.
+    Voice 1: beat 0 has no lyric; beat 1 (quarter, [0.5, 1.0]) sings "lo".
+
+    "hel" spans [0.0, 0.5]; "lo" spans [0.5, 1.0] — disjoint, so both survive.
+    """
+    mb = safe_fromstring('<MasterBar><Time>4/4</Time><Bars>0</Bars></MasterBar>')
+    bars = {'0': safe_fromstring('<Bar><Voices>0 1</Voices></Bar>')}
+    voices = {
+        '0': safe_fromstring('<Voice><Beats>0 1</Beats></Voice>'),
+        '1': safe_fromstring('<Voice><Beats>2 3</Beats></Voice>'),
+    }
+    beats = {
+        '0': safe_fromstring(
+            '<Beat><Rhythm ref="r0"/><Lyrics><Line>hel</Line></Lyrics>'
+            '<Notes>0</Notes></Beat>'),
+        '1': safe_fromstring('<Beat><Rhythm ref="r0"/><Notes>0</Notes></Beat>'),
+        '2': safe_fromstring('<Beat><Rhythm ref="r0"/><Notes>0</Notes></Beat>'),
+        '3': safe_fromstring(
+            '<Beat><Rhythm ref="r0"/><Lyrics><Line>lo</Line></Lyrics>'
+            '<Notes>0</Notes></Beat>'),
+    }
+    notes = {'0': safe_fromstring(
+        '<Note><Properties><Property name="String"><String>0</String></Property>'
+        '<Property name="Fret"><Fret>5</Fret></Property></Properties></Note>')}
+    rhythms = {'r0': safe_fromstring(
+        '<Rhythm><NoteValue>Quarter</NoteValue></Rhythm>')}
+    out = convert_vocal_track(
+        safe_fromstring('<GPIF><MasterBars/></GPIF>'),
+        {'string_pitches': [64, 59, 55, 50, 45, 40]},
+        0, [mb], bars, voices, beats, notes, rhythms)
+    vocals = safe_fromstring(out).findall('vocal')
+    lyrics = [v.get('lyric') for v in vocals]
+    assert lyrics == ['hel', 'lo']
+    times = [float(v.get('time')) for v in vocals]
+    assert times == sorted(times)

@@ -2220,6 +2220,13 @@ def convert_file(
 _VOCAL_MIDI_PROGRAMS = {52, 53, 54, 85, 86, 87}  # Choir Aahs, Voice Oohs, Synth Voice, Lead Voice
 _VOCAL_NAME_KEYWORDS = {'vocal', 'voice', 'vox', 'sing', 'lyric', 'choir', 'lead voc', 'backing voc'}
 
+# Ties can extend a vocal token's length indefinitely if a fan tab stops
+# transcribing <Lyrics> partway through (later repeats left blank) while the
+# underlying notes still carry tie flags — see convert_vocal_track's tie
+# handling. No genuinely sung syllable runs longer than a few seconds, so cap
+# the extension instead of trusting an unbroken tie chain blindly.
+_VOCAL_TIE_MAX_LENGTH_S = 5.0
+
 
 def _is_vocal_track(track: dict) -> bool:
     """Return True if this track looks like a vocal/lyric part."""
@@ -2324,6 +2331,13 @@ def convert_vocal_track(
         if bid != '-1' and bid:
             bar = bars_by_id.get(bid)
             if bar is not None:
+                # Track whether this bar is claimed by an ongoing vocal tie
+                # (the tie destination lives in the first voice and extends
+                # the vocal into this bar). When claimed, later voices'
+                # events are still processed but only disjoint ones survive
+                # the overlap filter — overlapping events are excluded so the
+                # flat timeline stays conflict-free.
+                voice_claimed = False
                 for vid in bar.findtext('Voices', '').split():
                     if vid == '-1':
                         continue
@@ -2331,6 +2345,7 @@ def convert_vocal_track(
                     if voice is None:
                         continue
 
+                    voice_was_claimed = voice_claimed
                     voice_time = current_time
                     for beat_id in voice.findtext('Beats', '').split():
                         beat_el = beats_dict.get(beat_id)
@@ -2357,13 +2372,37 @@ def convert_vocal_track(
                                 if note_el is None:
                                     continue
 
-                                # Tie destination: extend previous vocal's length
+                                # Tie destination: extend previous vocal's length.
+                                # Capped: a tab that stops transcribing lyrics
+                                # partway through (later repeats left blank,
+                                # common in fan tabs) can still carry tie flags
+                                # on the trailing notes of that string for the
+                                # rest of the song, which would otherwise keep
+                                # extending the last real syllable indefinitely
+                                # (observed: a "life" stretched to 104s). No
+                                # genuinely sung syllable runs longer than a
+                                # few seconds, so bound the extension instead
+                                # of trusting an unbroken tie chain blindly.
                                 if _note_is_tie(note_el):
                                     if raw_vocals:
-                                        raw_vocals[-1]['length'] = max(
-                                            raw_vocals[-1]['length'],
-                                            (voice_time + audio_offset + dur) - raw_vocals[-1]['time']
-                                        )
+                                        raw_vocals[-1]['length'] = min(
+                                            _VOCAL_TIE_MAX_LENGTH_S,
+                                            max(
+                                                raw_vocals[-1]['length'],
+                                                (voice_time + audio_offset + dur) - raw_vocals[-1]['time']
+                                            ),
+                                         )
+                                        # Claim the bar only when the tie
+                                        # extends the vocal into the bar or
+                                        # the capped vocal duration still
+                                        # overlaps a later voice; otherwise
+                                        # the tie is a dangling flag (e.g.
+                                        # a fan tab that stopped
+                                        # transcribing lyrics) and the bar
+                                        # stays available for a
+                                        # lyric-bearing voice.
+                                        if raw_vocals[-1]['time'] + raw_vocals[-1]['length'] > current_time + audio_offset:
+                                            voice_claimed = True
                                     # Do NOT advance voice_time here — the
                                     # beat-end `voice_time += dur` below advances
                                     # exactly once per beat. Incrementing here too
@@ -2385,17 +2424,44 @@ def convert_vocal_track(
                         if lyric_raw:
                             lyric = _gpx_lyric_to_rs(lyric_raw)
                             if lyric:
+                                this_time = round(voice_time + audio_offset, 3)
+                                this_length = round(dur, 3)
+                                # When this is a later voice (the bar was already
+                                # claimed by an earlier voice's tie or lyric),
+                                # only keep the event if it doesn't overlap the
+                                # selected vocal timeline. Disjoint events are
+                                # preserved; overlapping ones are excluded so
+                                # the flat timeline stays conflict-free.
+                                if voice_was_claimed and raw_vocals:
+                                    this_start = this_time
+                                    this_end = this_time + this_length
+                                    _overlaps = any(
+                                        v['time'] < this_end and (v['time'] + v['length']) > this_start
+                                        for v in raw_vocals
+                                    )
+                                    if _overlaps:
+                                        voice_time += dur
+                                        continue
                                 raw_vocals.append({
-                                    'time': round(voice_time + audio_offset, 3),
-                                    'length': round(dur, 3),
+                                    'time': this_time,
+                                    'length': this_length,
                                     'lyric': lyric,
                                     'note': midi_note,
                                     'is_tie_origin': is_tie_origin,
                                 })
+                                voice_claimed = True
 
                         voice_time += dur
 
+                    # All voices are processed — overlapping later-voice events
+                    # are filtered above; disjoint ones are kept and sorted into
+                    # time order after the bar loop.
+
         current_time += bar_duration
+
+    # Sort into time order: later voices' disjoint events are collected after
+    # the claiming voice's events within each bar, so they may be out of order.
+    raw_vocals.sort(key=lambda v: v['time'])
 
     song_length = current_time + audio_offset
 
