@@ -51,8 +51,8 @@ P2 instead.
 
    Commits that touch only `plugins/**` don't need a prefix (that's the
    normal case and needs no special handling). This labeling is what lets
-   you `git log --grep -E '^(core|fix)(\([^)]*\))?:'` or cherry-pick your
-   minimal core diff onto a fresh upstream tag when things diverge badly.
+   you `git log --grep -E '^(core|hook|sync|fix)(\([^)]*\))?:'` or cherry-pick
+   your minimal core diff onto a fresh upstream tag when things diverge badly.
 
 3. **Upstream PRs retire debt.** Whenever a `core:`/`hook:`/`fix:` commit lands
    here, ask: *is this useful to anyone else running FeedBack?* If yes, open
@@ -61,6 +61,8 @@ P2 instead.
    becomes redundant on the next sync and your merge debt for that file
    drops to zero. Track open upstream PRs in commit trailers, e.g.
    `Upstream-PR: got-feedback/feedBack#1234`.
+   If the change is intentionally fork-only (not upstreamable), add a
+   `Fork-Only-Reason:` trailer explaining why.
 
 4. **Sync before you build.** Before starting new fork-only work, pull
    upstream first (`scripts/fork-sync.sh`). Small, frequent syncs (weekly)
@@ -114,29 +116,26 @@ Policy that isn't checked erodes. Two mechanisms enforce this one:
   conflict in the exact file this policy is trying to keep conflict-free):
   - `core-commit-labeling` fails a PR if any commit it introduces (relative
     to the PR base) touches a core path without a `core:`/`hook:`/`sync:`/
-    `fix:` prefix.
-  - `upstream-drift` is advisory-only: reports how many commits behind
-    `got-feedback/feedBack:main` this branch is, and warns (without failing)
-    once that count crosses a threshold, as a nudge for Rule 4.
+    `fix:` prefix. **This is the only rule enforced as a hard failure.**
+  - `mixed-core-plugin-commits` warns when a single commit touches both core
+    paths and `plugins/**` (Rule 1: prefer hook injection over mixing).
+  - `core-diff-size` reports the total lines added/removed in core files for
+    visibility (Rule of thumb: keep core edits small).
+  - `core-upstream-trailer` warns when a `core:`/`hook:`/`sync:`/`fix:`
+    commit lacks both an `Upstream-PR:` and a `Fork-Only-Reason:` trailer
+    (Rule 3).
+  - `upstream-drift` reports how many commits behind `got-feedback/feedBack:main`
+    this branch is, and warns (or fails, if configured) once that count crosses
+    a threshold, as a nudge for Rule 4. Threshold and fail mode are
+    configurable via repository variables `FORK_AUDIT_DRIFT_THRESHOLD`
+    (default 50) and `FORK_AUDIT_DRIFT_FAIL` (default `false`).
 - **`scripts/fork-sync.sh`** — sets up the `upstream` remote if missing and
   fetches/reports drift, so P0 syncs are a one-command habit rather than a
   thing you have to remember how to do.
 
-## Current state (as of the last audit)
+## Compatibility metadata
 
-Recorded here so the next audit has a baseline to diff against, not as a
-permanent record — update or delete this section once it's stale.
-
-- No `upstream` remote was configured in this fork as of 2026-08-02, despite
-  `CLAUDE.md` documenting the `origin`/`upstream` split as the intended
-  convention. `scripts/fork-sync.sh` fixes this on first run.
-- Three fork-only commits existed on `main` at audit time, all direct core
-  edits with no `core:`/`hook:` labeling (predating this policy, so not
-  retroactively flagged by CI):
-  - `830a708` — Guitar Pro strum-direction import (`lib/gp2rs.py`,
-    `lib/gp2rs_gpx.py`). Real feature logic in a converter core owns; a
-    reasonable upstream PR candidate under Rule 3.
-  - `5b443e9` — null-check fix in `lib/routers/ws_highway.py`. A genuine bug
-    fix (P3's legitimate exception) — a good candidate to send upstream.
-  - `b9e7c3d` — `Dockerfile` FFmpeg asset fix. Build-only, low conflict risk,
-    also a reasonable upstream PR candidate.
+Plugin/core coupling is made machine-readable via the compatibility metadata
+enforcement tracked in issue #102. When that work lands, the fork-audit will
+gain a check that validates declared compatibility ranges against the
+upstream version being synced.

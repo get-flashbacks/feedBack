@@ -47,9 +47,116 @@ jobs:
           done
           exit $fail
 
+  mixed-core-plugin-commits:
+    # Rule 1: Hook injection over inline edits. A commit that touches both
+    # core paths AND plugins/** mixes feature logic with extension points.
+    # This check flags such commits so they can be split.
+    name: mixed-core-plugin-commits
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Flag commits touching both core and plugins/**
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          commits=$(git rev-list "$BASE_SHA".."$HEAD_SHA")
+
+          fail=0
+          for sha in $commits; do
+            files=$(git show --name-only --pretty=format:"" "$sha")
+            core_hit=$(printf '%s\n' "$files" | grep -Ev '^(plugins/|docs/|tests/|scripts/|specs/|\.specify/)|^(CHANGELOG\.md|VERSION)$' || true)
+            plugin_hit=$(printf '%s\n' "$files" | grep '^plugins/' || true)
+            [ -z "$core_hit" ] && continue
+            [ -z "$plugin_hit" ] && continue
+
+            subject=$(git show -s --format=%s "$sha")
+            echo "::warning::Commit $sha ('$subject') touches both core and plugins/ — consider splitting into a hook: commit (core) + a plugin-only commit (Rule 1). Core: $(printf '%s' "$core_hit" | tr '\n' ' '); Plugins: $(printf '%s' "$plugin_hit" | tr '\n' ' ')"
+          done
+          exit 0
+
+  core-diff-size:
+    # Report the size of core changes introduced by this PR, as a proxy for
+    # "keep core edits small" (Rule of thumb). Does not fail — just informs.
+    name: core-diff-size
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Report core diff stats for this PR
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # Find all core files touched in this PR
+          files=$(git diff --name-only "$BASE_SHA".."$HEAD_SHA" | grep -Ev '^(plugins/|docs/|tests/|scripts/|specs/|\.specify/)|^(CHANGELOG\.md|VERSION)$' || true)
+          if [ -z "$files" ]; then
+            echo "No core files touched in this PR."
+            exit 0
+          fi
+
+          echo "Core files changed:"
+          echo "$files" | sed 's/^/  /'
+
+          # Report total lines added/removed in core
+          stats=$(git diff --shortstat "$BASE_SHA".."$HEAD_SHA" -- $files 2>/dev/null || echo "0 files changed, 0 insertions(+), 0 deletions(-)")
+          echo "$stats"
+
+          # Also show per-file breakdown
+          echo "Per-file breakdown:"
+          git diff --stat "$BASE_SHA".."$HEAD_SHA" -- $files | sed 's/^/  /'
+
+  core-upstream-trailer:
+    # Rule 3: Upstream PRs retire debt. Core commits should have an
+    # Upstream-PR trailer (if sent upstream) or a Fork-Only-Reason trailer
+    # (if intentionally fork-only). This check warns when neither is present.
+    name: core-upstream-trailer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check for Upstream-PR or Fork-Only-Reason trailers on core commits
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          commits=$(git rev-list "$BASE_SHA".."$HEAD_SHA")
+
+          for sha in $commits; do
+            files=$(git show --name-only --pretty=format:"" "$sha")
+            core_hit=$(printf '%s\n' "$files" | grep -Ev '^(plugins/|docs/|tests/|scripts/|specs/|\.specify/)|^(CHANGELOG\.md|VERSION)$' || true)
+            [ -z "$core_hit" ] && continue
+
+            subject=$(git show -s --format=%s "$sha")
+            # Only check core:/hook:/sync:/fix: commits (the ones that represent core debt)
+            if ! printf '%s' "$subject" | grep -qE '^(core|hook|sync|fix)(\([^)]*\))?:'; then
+              continue
+            fi
+
+            body=$(git show -s --format=%b "$sha")
+            has_upstream_pr=$(printf '%s' "$body" | grep -qi '^upstream-pr:' && echo 1 || echo 0)
+            has_fork_only=$(printf '%s' "$body" | grep -qi '^fork-only-reason:' && echo 1 || echo 0)
+
+            if [ "$has_upstream_pr" -eq 0 ] && [ "$has_fork_only" -eq 0 ]; then
+              echo "::warning::Commit $sha ('$subject') is a core/hook/sync/fix commit but has neither Upstream-PR: nor Fork-Only-Reason: trailer — see docs/fork-maintenance.md (Rule 3)."
+            fi
+          done
+
   upstream-drift:
-    # Advisory only — never fails the PR. Nudges toward Rule 4 (sync often,
-    # in small increments) instead of letting drift build up silently.
+    # Rule 4: Sync before you build. Reports how many commits behind
+    # got-feedback/feedBack:main this branch is. Configurable threshold
+    # via FORK_AUDIT_DRIFT_THRESHOLD (default 50). Can be set to fail
+    # via FORK_AUDIT_DRIFT_FAIL=true.
     name: upstream-drift
     runs-on: ubuntu-latest
     steps:
@@ -61,6 +168,9 @@ jobs:
       - name: Compare PR base against got-feedback/feedBack:main
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          # These can be overridden at repository/organization level
+          THRESHOLD: ${{ vars.FORK_AUDIT_DRIFT_THRESHOLD || 50 }}
+          FAIL: ${{ vars.FORK_AUDIT_DRIFT_FAIL || 'false' }}
         run: |
           if ! git fetch --no-tags https://github.com/got-feedback/feedBack.git main:refs/remotes/canonical-upstream/main; then
             echo "::warning::Unable to fetch got-feedback/feedBack:main; skipping upstream drift check."
@@ -71,6 +181,11 @@ jobs:
             exit 0
           fi
           echo "PR base is $behind commit(s) behind got-feedback/feedBack:main."
-          if [ "$behind" -gt 50 ]; then
-            echo "::warning::This branch's base is $behind commits behind got-feedback/feedBack:main. Consider running scripts/fork-sync.sh before adding more fork-only work (docs/fork-maintenance.md, Rule 4)."
+          if [ "$behind" -gt "$THRESHOLD" ]; then
+            if [ "$FAIL" = "true" ]; then
+              echo "::error::This branch's base is $behind commits behind got-feedback/feedBack:main (threshold: $THRESHOLD). Run scripts/fork-sync.sh before adding more fork-only work (docs/fork-maintenance.md, Rule 4)."
+              exit 1
+            else
+              echo "::warning::This branch's base is $behind commits behind got-feedback/feedBack:main (threshold: $THRESHOLD). Consider running scripts/fork-sync.sh before adding more fork-only work (docs/fork-maintenance.md, Rule 4)."
+            fi
           fi
