@@ -125,6 +125,17 @@ Notes:
 
 ## Plugin Best Practices
 
+### Host compatibility — required vs optional capability checks
+
+Probe host APIs with feature detection at the call site — one predicate per
+feature, exact-surface checks only, never a version-string comparison — and let
+an **optional** feature degrade alone when its API is missing: warn once
+naming the plugin, the feature, and the missing requirement (`console.warn` in
+`screen.js`, `context["log"].warning` in `routes.py`), never throw, and never
+block the plugin or raise its basic-mode floor. Full convention, the canonical
+feature-probe pattern, and per-API degradation contracts for the
+[compatibility matrix](docs/compatibility.md) rows: **[docs/plugin-host-compat.md](docs/plugin-host-compat.md)**.
+
 ### v3 UI (fee[dB]ack v0.3.0) — player-chrome contract
 
 v0.3.0's redesigned UI is **the only UI** — the classic v2 shell and its
