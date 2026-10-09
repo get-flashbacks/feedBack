@@ -133,7 +133,9 @@ The contracts are documented in [CLAUDE.md](CLAUDE.md), with deeper guides in
 [plugin-styles.md](docs/plugin-styles.md),
 [plugin-modules.md](docs/plugin-modules.md),
 [plugin-panes.md](docs/plugin-panes.md),
-[capability-recipes.md](docs/capability-recipes.md), and
+[capability-recipes.md](docs/capability-recipes.md),
+[plugin-host-compat.md](docs/plugin-host-compat.md) (how to probe required vs
+optional host APIs so a missing feature degrades alone, never the plugin), and
 [compatibility.md](docs/compatibility.md) (which host commit each plugin
 feature needs, pinned by hash rather than version string).
 
