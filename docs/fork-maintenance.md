@@ -54,7 +54,7 @@ P2 instead.
    you `git log --grep -E '^(core|hook|sync|fix)(\([^)]*\))?:'` or cherry-pick
    your minimal core diff onto a fresh upstream tag when things diverge badly.
 
-3. **Upstream PRs retire debt.** Whenever a `core:`/`hook:`/`fix:` commit lands
+3. **Upstream PRs retire debt.** Whenever a `core:`/`hook:`/`sync:`/`fix:` commit lands
    here, ask: *is this useful to anyone else running FeedBack?* If yes, open
    a PR against `got-feedback/feedBack:main` (see `CONTRIBUTING.md` for the
    DCO/licensing requirements). Once it merges upstream, your local edit

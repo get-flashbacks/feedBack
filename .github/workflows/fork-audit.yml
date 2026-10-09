@@ -143,9 +143,10 @@ jobs:
               continue
             fi
 
-            body=$(git show -s --format=%b "$sha")
-            has_upstream_pr=$(printf '%s' "$body" | grep -qi '^upstream-pr:' && echo 1 || echo 0)
-            has_fork_only=$(printf '%s' "$body" | grep -qi '^fork-only-reason:' && echo 1 || echo 0)
+            # Use %B (full commit message) to catch trailers in the final paragraph
+            full_msg=$(git show -s --format=%B "$sha")
+            has_upstream_pr=$(printf '%s' "$full_msg" | grep -qi '^upstream-pr:' && echo 1 || echo 0)
+            has_fork_only=$(printf '%s' "$full_msg" | grep -qi '^fork-only-reason:' && echo 1 || echo 0)
 
             if [ "$has_upstream_pr" -eq 0 ] && [ "$has_fork_only" -eq 0 ]; then
               echo "::warning::Commit $sha ('$subject') is a core/hook/sync/fix commit but has neither Upstream-PR: nor Fork-Only-Reason: trailer — see docs/fork-maintenance.md (Rule 3)."
