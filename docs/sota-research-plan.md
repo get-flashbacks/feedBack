@@ -103,19 +103,24 @@ rate below, so its CREPE-vs-pYIN numbers cannot be dropped into the Success Crit
 ```python
 # Example: Pitch extraction PoC
 import librosa
+import torch
 import torchcrepe
 
-audio, sr = librosa.load('test_vocal.wav')
+audio, sr = librosa.load('test_vocal.wav', sr=16000, mono=True)
+hop_length = 160  # 10 ms; align reference timestamps before scoring
 
 # Current approach (pYIN)
 f0_pyin, voiced_pyin, voicing_prob_pyin = librosa.pyin(
-    audio, fmin=80, fmax=400, sr=sr
+    audio, fmin=80, fmax=400, sr=sr, hop_length=hop_length
 )
 
 # Alternative (CREPE)
-f0_crepe = torchcrepe.predict(
-    audio, sr, viterbi=True, return_confidence=False
+f0_crepe, periodicity = torchcrepe.predict(
+    torch.from_numpy(audio).unsqueeze(0), sr, hop_length, 80, 400, 'tiny',
+    device='cpu', decoder=torchcrepe.decode.viterbi, return_periodicity=True
 )
+f0_crepe = f0_crepe.squeeze(0).numpy()
+# Tune periodicity/silence thresholds on a development split, not the test set.
 
 # Compare against a ground-truth F0 trace — not against each other, and not
 # against pYIN. Scoring pYIN against its own output is 0% octave error by
@@ -176,10 +181,8 @@ import numpy as np
 def octave_error_rate(predicted, ground_truth, threshold_cents=50):
     """% of frames with an octave (±1200 cent) error.
 
-    Errors are kept *signed* so both octave directions are detectable. An
-    absolute-error implementation cannot detect the downward octave at all:
-    with `errors >= 0`, the `|errors + 1200| < threshold` branch is never
-    true, which understates the rate by up to 2x on octave-flipped material.
+    Absolute cents error compared with 1200 detects both octave directions.
+    The old |errors + 1200| branch was redundant, not a missing direction.
 
     Both inputs are F0 in Hz, so the difference is taken in cents. An octave
     is a factor of 2, not an offset of 1200, so a raw Hz difference tested
@@ -188,10 +191,14 @@ def octave_error_rate(predicted, ground_truth, threshold_cents=50):
     non-positive F0 on either side have no comparable pitch and are excluded
     from the denominator.
     """
+    p = np.asarray(predicted, dtype=float)
+    g = np.asarray(ground_truth, dtype=float)
+    if p.ndim != 1 or p.shape != g.shape:
+        raise ValueError("F0 streams must be aligned one-dimensional arrays")
+    valid = np.isfinite(p) & np.isfinite(g) & (p > 0) & (g > 0)
     with np.errstate(divide='ignore', invalid='ignore'):
-        errors = 1200 * np.log2(np.asarray(predicted, dtype=float)
-                                / np.asarray(ground_truth, dtype=float))
-    finite = np.isfinite(errors)
+        errors = 1200 * np.log2(p / g)
+    finite = valid & np.isfinite(errors)
     if not finite.any():
         return float('nan')
     octave_errors = (np.abs(errors - 1200) < threshold_cents) | \
@@ -206,7 +213,7 @@ def voicing_accuracy(predicted_voiced, ground_truth_voiced):
     return np.mean(p == g) * 100
 
 
-def raw_pitch_accuracy(predicted, predicted_voiced, ground_truth, ground_truth_voiced,
+def conditional_pitch_accuracy(predicted, predicted_voiced, ground_truth, ground_truth_voiced,
                        threshold_cents=50):
     """% of mutually voiced frames within threshold_cents of ground truth.
 
@@ -222,9 +229,8 @@ def raw_pitch_accuracy(predicted, predicted_voiced, ground_truth, ground_truth_v
     if not both_voiced.any():
         return float('nan')
     # The difference is taken in cents for the same reason as in
-    # octave_error_rate: 50 cents is 0.3 Hz, so a raw Hz difference tested
-    # against a 50-cent threshold is true for essentially every frame and
-    # saturates this metric near 100% for any engine. A frame whose F0 is
+    # octave_error_rate: cents describe a frequency ratio, not a fixed
+    # Hz difference. A frame whose F0 is
     # non-finite or non-positive on either side counts as an error rather than
     # dropping out of the denominator, which would move the ratio with the
     # engine's output validity.
@@ -232,6 +238,12 @@ def raw_pitch_accuracy(predicted, predicted_voiced, ground_truth, ground_truth_v
         errors = np.abs(1200 * np.log2(p[both_voiced] / g[both_voiced]))
     return np.mean(errors < threshold_cents) * 100
 ```
+
+The pitch helper above is **conditional accuracy on mutually voiced frames**, not standard
+raw pitch accuracy (RPA). Report denominator/coverage and voicing accuracy together.
+For published comparisons, use [mir_eval RPA](https://mir-eval.readthedocs.io/latest/api/melody.html#mir_eval.melody.raw_pitch_accuracy),
+whose denominator includes every reference-voiced frame, including missing estimates.
+Withholding difficult frames can improve conditional accuracy without improving the extractor.
 
 **Stem separation:**
 
@@ -264,10 +276,10 @@ _ROOT = re.compile(r'^([A-G])([#b]{0,2})')
 _QUALITY_ALIASES = {
     '': 'maj', 'maj': 'maj', 'M': 'maj',
     'min': 'min', 'm': 'min',
-    'maj7': '7', 'M7': '7', '7': '7', 'Δ7': '7',
+    'maj7': 'maj7', 'M7': 'maj7', '7': '7', 'Δ7': 'maj7',
     'min7': 'm7', 'm7': 'm7',
     'dim': 'dim', 'aug': 'aug', 'sus4': 'sus4', 'sus2': 'sus2',
-    '9': '9', 'maj9': '9', '11': '11', '13': '13',
+    '9': '9', 'maj9': 'maj9', '11': '11', '13': '13',
 }
 
 
@@ -279,10 +291,9 @@ def _root_name(m):
 def normalize_chord(symbol):
     """Reduce a chord label to a comparable (root, quality, bass) tuple.
 
-    Raw string equality is not a metric: `C`, `Cmaj`, `CM` and `CMaj7` /
-    `Cmaj7` are one chord to a listener and four different strings, so
-    unnormalized comparison measures labelling style rather than accuracy.
-    Both sides of every comparison must be normalized.
+    C, Cmaj and CM are aliases. Cmaj7 and C7 have different seventh intervals
+    and must remain distinct, as must Cmaj9 and C9. Both sides of every
+    comparison must use the same declared vocabulary.
     """
     if symbol is None:
         return None
@@ -336,6 +347,11 @@ def boundary_accuracy(predicted_boundaries, ground_truth_boundaries, tolerance_s
     )
     return matched / len(ground_truth_boundaries) * 100
 ```
+
+The chord helper is an illustrative exact-label score, not a standard Isophonics metric.
+For published comparisons, convert labels to [mir_eval chord syntax](https://mir-eval.readthedocs.io/latest/api/chord.html),
+declare a vocabulary (e.g. majmin or sevenths), use duration weighting and report out-of-vocabulary
+coverage. This helper does not normalize enharmonic spellings.
 
 `boundary_accuracy` defaults to `tolerance_sec=0.5` here to match the Isophonics-style reporting
 that chord-detection literature uses; the Success Criteria table below states the tolerance it
@@ -554,20 +570,20 @@ with the specific missing input — not as a partial number.
 
 Every difference from the `#13` issue body, and why:
 
-1. **Octave-error metric could only detect one direction.** The body took an absolute error and then
-   tested `|errors + 1200| < threshold`, which is never true for non-negative `errors`. Now uses
-   signed errors. *Materially understates octave error on octave-flipped material.*
+1. **Octave-error metric mixed Hz and cents.** Use a log-frequency ratio in cents.
+   The old absolute-error +1200 branch was redundant; absolute cents error compared
+   with 1200 already detects both upward and downward octave errors.
 2. **Raw pitch accuracy had no voicing mask.** Unvoiced frames sat in the denominator while their F0
    was `NaN`, and `NaN < threshold` is `False` — so the metric silently penalized whichever engine
-   marked more frames unvoiced. `raw_pitch_accuracy` now takes both voicing streams and restricts
+   marked more frames unvoiced. `conditional_pitch_accuracy` now takes both voicing streams and restricts
    the ratio to mutually voiced frames.
 3. **`word_error_rate` was not WER.** `difflib.SequenceMatcher(...).ratio()` is a similarity ratio,
    not an edit-distance word error rate, and cannot be compared against published WER figures.
    Replaced with `jiwer.wer`.
 4. **Boundary accuracy counted the wrong side and could exceed 100%.** It matched predicted
    boundaries and divided by the ground-truth count. Now counts matches from the ground-truth side.
-5. **Chord accuracy compared raw label strings**, so `C` vs `Cmaj` vs `CMaj7` scored as wrong
-   answers. Both sides are now normalized to `(root, quality, bass)` before comparison.
+5. **Chord accuracy compared raw label strings.** C / Cmaj / CM are aliases, but Cmaj7
+   is a different chord. Normalize aliases without merging distinct harmonic qualities.
 6. **`engagement_retention` divided by `complete_a`**, raising `ZeroDivisionError` on a zero-completion
    arm instead of returning a result.
 7. **Common Voice has no singing subset.** It is a read-speech corpus. The benchmark row now records
@@ -594,11 +610,21 @@ Every difference from the `#13` issue body, and why:
     every candidate tool is a dependency of this repository, and several no longer are.
 15. **Both pitch metrics compared Hz differences against cent thresholds.** `octave_error_rate`
     tested a raw `predicted - ground_truth` F0 difference against `±1200` cents, and
-    `raw_pitch_accuracy` tested a raw difference against `50` cents. An octave is a factor of 2,
-    not an offset of 1200, and 50 cents is 0.3 Hz, so the first never fired and the second
-    saturated near 100% for any engine. Both now take the difference in cents
+    `conditional_pitch_accuracy` tested a raw difference against `50` cents. An octave is a factor of 2,
+    not an offset of 1200. A 50-cent interval is a frequency ratio of 2**(50/1200),
+    whose Hz difference depends on the starting frequency. Both now take the difference in cents
     (`1200 * log2(p / g)`).
 16. **Phase 2 compared each engine against the other.** The snippet scored pYIN against its own
     output — 0% octave error by construction — and CREPE against pYIN, which measures
     disagreement rather than accuracy. The example now scores both against a ground-truth F0
     trace, matching how the Success Criteria table gates on MIR-1K.
+
+## Follow-up corrections (issue #13)
+
+- Major/dominant sevenths and ninths remain distinct; only notation aliases are equivalent.
+- Octave scoring requires finite positive F0 on both sides, including negative/negative input cases.
+  Absolute cents error already detects both octave directions; cents are not a fixed Hz interval.
+- Renamed the mutually-voiced pitch helper to conditional pitch accuracy and documented the
+  standard RPA denominator. Report coverage and voicing alongside conditional metrics.
+- The PoC uses the documented [torchcrepe tensor/decoder/periodicity API](https://github.com/maxrmorrison/torchcrepe#usage).
+  Model inference still requires audio and weights; the example does not constitute a benchmark.
