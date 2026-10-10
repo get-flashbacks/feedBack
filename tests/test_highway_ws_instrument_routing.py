@@ -193,3 +193,89 @@ def test_guitar_still_honors_saved_pref(make_client):
     with TestClient(server.app) as client:
         idx = _arr_index(client, "/ws/highway/gtr2.sloppak")
     assert idx == 1  # Rhythm, per preference
+
+
+def test_drum_arrangement_excluded_from_most_notes_fallback(make_client):
+    """Drum arrangements (many notes) should not win the most-notes fallback.
+
+    When no instrument preference is set and no explicit arrangement is requested,
+    the WS falls back to the arrangement with the most notes. Drum parts encode
+    GM drum numbers as frets and hit on nearly every subdivision, so they would
+    otherwise win the count. This test ensures drums are excluded and the busiest
+    non-drum part (Rhythm) is selected instead.
+    """
+    server = make_client(instrument="guitar")
+    # Drum part with 400 notes, Rhythm with 40, Lead with 20
+    # Use name-based detection (name contains "drums") to avoid needing drum_tab
+    def _arr_with_count(notes):
+        return {
+            "notes": [{"t": 0.0, "s": 0, "f": 0}] * notes,
+            "chords": [],
+            "anchors": [],
+            "handshapes": [],
+            "templates": [],
+            "beats": [{"time": 0.0, "measure": 1}],
+            "sections": [{"name": "intro", "number": 1, "time": 0.0}],
+        }
+
+    pak = server._get_dlc_dir() / "drumtest.sloppak"
+    pak.mkdir()
+    (pak / "arrangements").mkdir()
+    (pak / "arrangements" / "drums.json").write_text(json.dumps(_arr_with_count(400)))
+    (pak / "arrangements" / "rhythm.json").write_text(json.dumps(_arr_with_count(40)))
+    (pak / "arrangements" / "lead.json").write_text(json.dumps(_arr_with_count(20)))
+    manifest = {
+        "title": "DrumTest",
+        "artist": "Tester",
+        "album": "",
+        "year": 2026,
+        "duration": 10.0,
+        "arrangements": [
+            {"id": "drums", "name": "Drums", "file": "arrangements/drums.json"},
+            {"id": "rhythm", "name": "Rhythm", "file": "arrangements/rhythm.json"},
+            {"id": "lead", "name": "Lead", "file": "arrangements/lead.json"},
+        ],
+        "stems": [],
+    }
+    (pak / "manifest.yaml").write_text(yaml.safe_dump(manifest, sort_keys=False))
+
+    with TestClient(server.app) as client:
+        idx = _arr_index(client, "/ws/highway/drumtest.sloppak")
+    # Should pick Rhythm (index 1 in manifest order)
+    assert idx == 1  # Rhythm is at manifest index 1
+
+
+def test_drum_only_pack_falls_back_to_drums(make_client):
+    """A drum-only pack should still fall back to the drum arrangement."""
+    server = make_client(instrument="guitar")
+    def _arr_with_count(notes):
+        return {
+            "notes": [{"t": 0.0, "s": 0, "f": 0}] * notes,
+            "chords": [],
+            "anchors": [],
+            "handshapes": [],
+            "templates": [],
+            "beats": [{"time": 0.0, "measure": 1}],
+            "sections": [{"name": "intro", "number": 1, "time": 0.0}],
+        }
+
+    pak = server._get_dlc_dir() / "drumonly.sloppak"
+    pak.mkdir()
+    (pak / "arrangements").mkdir()
+    (pak / "arrangements" / "drums.json").write_text(json.dumps(_arr_with_count(400)))
+    manifest = {
+        "title": "DrumOnly",
+        "artist": "Tester",
+        "album": "",
+        "year": 2026,
+        "duration": 10.0,
+        "arrangements": [
+            {"id": "drums", "name": "Drums", "file": "arrangements/drums.json"},
+        ],
+        "stems": [],
+    }
+    (pak / "manifest.yaml").write_text(yaml.safe_dump(manifest, sort_keys=False))
+
+    with TestClient(server.app) as client:
+        idx = _arr_index(client, "/ws/highway/drumonly.sloppak")
+    assert idx == 0  # Only arrangement is Drums

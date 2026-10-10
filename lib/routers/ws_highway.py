@@ -27,6 +27,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from song import (
     anchor_to_wire,
     arrangement_is_bass,
+    arrangement_is_drums,
     arrangement_string_count,
     base_open_string_midis,
     chord_template_to_wire,
@@ -323,14 +324,21 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
                             best = i
                             break
         if best < 0:
-            # Fallback: most notes
+            # Fallback: most notes (excluding drum arrangements, which hit on nearly
+            # every subdivision and would otherwise win the count)
             best = 0
             best_count = 0
             for i, a in enumerate(song.arrangements):
+                if arrangement_is_drums(a):
+                    continue
                 c = len(a.notes) + sum(len(ch.notes) for ch in a.chords)
                 if c > best_count:
                     best_count = c
                     best = i
+            # If all arrangements were drums (drum-only pack), fall back to the
+            # first arrangement
+            if best_count == 0 and song.arrangements:
+                best = 0
         arr = song.arrangements[best]
 
         # Resolve the manifest arrangement id for notation lookup (Option B loader).

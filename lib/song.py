@@ -749,6 +749,19 @@ def arrangement_is_bass(arr: Arrangement) -> bool:
     )
 
 
+def arrangement_is_drums(arr: Arrangement) -> bool:
+    """Whether ``arr`` is a drums arrangement, most-authoritative signal first:
+    an editor-authored ``type == "drums"`` (feedpak-spec §5.2), then the
+    legacy "drums"/"drum"/"percussion" case-insensitive substring in the name.
+    Single source of the drums decision so the arrangement fallback in the
+    highway WebSocket skips drum parts (which hit on nearly every subdivision
+    and would otherwise win the most-notes count)."""
+    return (
+        (arr.type or "").strip().lower() == "drums"
+        or any(kw in (arr.name or "").lower() for kw in ("drums", "drum", "percussion"))
+    )
+
+
 def arrangement_string_count(arr: Arrangement) -> int:
     """Derive the active arrangement's string count.
 
