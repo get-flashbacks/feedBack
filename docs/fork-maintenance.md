@@ -116,7 +116,7 @@ Policy that isn't checked erodes. Two mechanisms enforce this one:
   conflict in the exact file this policy is trying to keep conflict-free):
   - `core-commit-labeling` fails a PR if any commit it introduces (relative
     to the PR base) touches a core path without a `core:`/`hook:`/`sync:`/
-    `fix:` prefix. **This is the only rule enforced as a hard failure.**
+    `fix:` prefix. **This is the only rule enforced as a hard failure by default.**
   - `mixed-core-plugin-commits` warns when a single commit touches both core
     paths and `plugins/**` (Rule 1: prefer hook injection over mixing).
   - `core-diff-size` reports the total lines added/removed in core files for
@@ -128,7 +128,8 @@ Policy that isn't checked erodes. Two mechanisms enforce this one:
     this branch is, and warns (or fails, if configured) once that count crosses
     a threshold, as a nudge for Rule 4. Threshold and fail mode are
     configurable via repository variables `FORK_AUDIT_DRIFT_THRESHOLD`
-    (default 50) and `FORK_AUDIT_DRIFT_FAIL` (default `false`).
+    (default 50) and `FORK_AUDIT_DRIFT_FAIL` (default `false`). When
+    `FORK_AUDIT_DRIFT_FAIL=true`, this check also becomes a hard failure.
 - **`scripts/fork-sync.sh`** — sets up the `upstream` remote if missing and
   fetches/reports drift, so P0 syncs are a one-command habit rather than a
   thing you have to remember how to do.

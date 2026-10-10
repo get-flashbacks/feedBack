@@ -68,7 +68,8 @@ jobs:
 
           fail=0
           for sha in $commits; do
-            files=$(git show --name-only --pretty=format:"" "$sha")
+            # Use first-parent diff for merge commits to see net changes
+            files=$(git diff --name-only "$sha^1" "$sha")
             core_hit=$(printf '%s\n' "$files" | grep -Ev '^(plugins/|docs/|tests/|scripts/|specs/|\.specify/)|^(CHANGELOG\.md|VERSION)$' || true)
             plugin_hit=$(printf '%s\n' "$files" | grep '^plugins/' || true)
             [ -z "$core_hit" ] && continue
@@ -96,22 +97,22 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           # Find all core files touched in this PR
-          files=$(git diff --name-only "$BASE_SHA".."$HEAD_SHA" | grep -Ev '^(plugins/|docs/|tests/|scripts/|specs/|\.specify/)|^(CHANGELOG\.md|VERSION)$' || true)
-          if [ -z "$files" ]; then
+          mapfile -t core_files < <(git diff --name-only "$BASE_SHA".."$HEAD_SHA" | grep -Ev '^(plugins/|docs/|tests/|scripts/|specs/|\.specify/)|^(CHANGELOG\.md|VERSION)$' || true)
+          if [ "${#core_files[@]}" -eq 0 ]; then
             echo "No core files touched in this PR."
             exit 0
           fi
 
           echo "Core files changed:"
-          echo "$files" | sed 's/^/  /'
+          printf '  %s\n' "${core_files[@]}"
 
           # Report total lines added/removed in core
-          stats=$(git diff --shortstat "$BASE_SHA".."$HEAD_SHA" -- $files 2>/dev/null || echo "0 files changed, 0 insertions(+), 0 deletions(-)")
+          stats=$(git diff --shortstat "$BASE_SHA".."$HEAD_SHA" -- "${core_files[@]}" 2>/dev/null || echo "0 files changed, 0 insertions(+), 0 deletions(-)")
           echo "$stats"
 
           # Also show per-file breakdown
           echo "Per-file breakdown:"
-          git diff --stat "$BASE_SHA".."$HEAD_SHA" -- $files | sed 's/^/  /'
+          git diff --stat "$BASE_SHA".."$HEAD_SHA" -- "${core_files[@]}" | sed 's/^/  /'
 
   core-upstream-trailer:
     # Rule 3: Upstream PRs retire debt. Core commits should have an
@@ -143,10 +144,10 @@ jobs:
               continue
             fi
 
-            # Use %B (full commit message) to catch trailers in the final paragraph
-            full_msg=$(git show -s --format=%B "$sha")
-            has_upstream_pr=$(printf '%s' "$full_msg" | grep -qi '^upstream-pr:' && echo 1 || echo 0)
-            has_fork_only=$(printf '%s' "$full_msg" | grep -qi '^fork-only-reason:' && echo 1 || echo 0)
+            # Use git's trailer parser to reliably extract trailers
+            trailers=$(git show -s --format='%(trailers)' "$sha")
+            has_upstream_pr=$(printf '%s' "$trailers" | grep -qi '^upstream-pr:' && echo 1 || echo 0)
+            has_fork_only=$(printf '%s' "$trailers" | grep -qi '^fork-only-reason:' && echo 1 || echo 0)
 
             if [ "$has_upstream_pr" -eq 0 ] && [ "$has_fork_only" -eq 0 ]; then
               echo "::warning::Commit $sha ('$subject') is a core/hook/sync/fix commit but has neither Upstream-PR: nor Fork-Only-Reason: trailer — see docs/fork-maintenance.md (Rule 3)."
