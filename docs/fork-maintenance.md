@@ -114,14 +114,14 @@ Policy that isn't checked erodes. Two mechanisms enforce this one:
 - **`.github/workflows/fork-audit.yml`** — a fork-only CI workflow (does not
   touch or replace upstream's `ci.yml`/`ship-ci.yml`, to avoid creating a
   conflict in the exact file this policy is trying to keep conflict-free):
-  - `core-commit-labeling` fails a PR if any commit it introduces (relative
+- `core-commit-labeling` fails a PR if any commit it introduces (relative
     to the PR base) touches a core path without a `core:`/`hook:`/`sync:`/
     `fix:` prefix. **This is the only rule enforced as a hard failure by default.**
   - `mixed-core-plugin-commits` warns when a single commit touches both core
     paths and `plugins/**` (Rule 1: prefer hook injection over mixing).
   - `core-diff-size` reports the total lines added/removed in core files for
     visibility (Rule of thumb: keep core edits small).
-  - `core-upstream-trailer` warns when a `core:`/`hook:`/`sync:`/`fix:`
+  - `core-upstream-trailer` fails a PR when a `core:`/`hook:`/`sync:`/`fix:`
     commit lacks both an `Upstream-PR:` and a `Fork-Only-Reason:` trailer
     (Rule 3).
   - `upstream-drift` reports how many commits behind `got-feedback/feedBack:main`

@@ -117,7 +117,7 @@ jobs:
   core-upstream-trailer:
     # Rule 3: Upstream PRs retire debt. Core commits should have an
     # Upstream-PR trailer (if sent upstream) or a Fork-Only-Reason trailer
-    # (if intentionally fork-only). This check warns when neither is present.
+    # (if intentionally fork-only). This check fails when neither is present.
     name: core-upstream-trailer
     runs-on: ubuntu-latest
     steps:
@@ -133,6 +133,7 @@ jobs:
         run: |
           commits=$(git rev-list "$BASE_SHA".."$HEAD_SHA")
 
+          fail=0
           for sha in $commits; do
             files=$(git show --name-only --pretty=format:"" "$sha")
             core_hit=$(printf '%s\n' "$files" | grep -Ev '^(plugins/|docs/|tests/|scripts/|specs/|\.specify/)|^(CHANGELOG\.md|VERSION)$' || true)
@@ -150,9 +151,11 @@ jobs:
             has_fork_only=$(printf '%s' "$trailers" | grep -qi '^fork-only-reason:' && echo 1 || echo 0)
 
             if [ "$has_upstream_pr" -eq 0 ] && [ "$has_fork_only" -eq 0 ]; then
-              echo "::warning::Commit $sha ('$subject') is a core/hook/sync/fix commit but has neither Upstream-PR: nor Fork-Only-Reason: trailer — see docs/fork-maintenance.md (Rule 3)."
+              echo "::error::Commit $sha ('$subject') is a core/hook/sync/fix commit but has neither Upstream-PR: nor Fork-Only-Reason: trailer — see docs/fork-maintenance.md (Rule 3)."
+              fail=1
             fi
           done
+          exit $fail
 
   upstream-drift:
     # Rule 4: Sync before you build. Reports how many commits behind
