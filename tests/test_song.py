@@ -1369,6 +1369,23 @@ def test_arrangement_is_bass_signal_safety():
     assert not arrangement_is_bass(Arrangement(name="", type=""))
 
 
+def test_arrangement_is_drums_signal_safety():
+    # The manifest `type` is lifted onto arr.type verbatim; the helper must be
+    # safe against the messy shapes a hand-edited/loose source can produce.
+    from song import arrangement_is_drums
+    assert arrangement_is_drums(Arrangement(name="Kit", type="drums"))
+    assert arrangement_is_drums(Arrangement(name="Kit", type=" DRUMS "))  # ws/case
+    assert arrangement_is_drums(Arrangement(name="Drums"))                # legacy name
+    assert arrangement_is_drums(Arrangement(name="Drum Kit"))             # legacy name
+    assert arrangement_is_drums(Arrangement(name="Percussion"))           # legacy name
+    # Non-drums / absent signals stay False.
+    assert not arrangement_is_drums(Arrangement(name="Lead", type=""))
+    assert not arrangement_is_drums(Arrangement(name="Rhythm", type="guitar"))
+    assert not arrangement_is_drums(Arrangement(name="Bass", type="bass"))
+    assert not arrangement_is_drums(Arrangement(name="Keys", type="keys"))
+    assert not arrangement_is_drums(Arrangement(name="", type=""))
+
+
 # ── compute_smart_names ───────────────────────────────────────────────────────
 
 def _sarr(path_lead=False, path_rhythm=False, path_bass=False,
