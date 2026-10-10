@@ -326,21 +326,18 @@ async def highway_ws(websocket: WebSocket, filename: str, arrangement: int = -1,
         if best < 0:
             # Fallback: most notes (excluding drum arrangements, which hit on nearly
             # every subdivision and would otherwise win the count)
-            best = 0
-            best_count = 0
-            non_drum_found = False
+            best = -1
+            best_count = -1
             for i, a in enumerate(song.arrangements):
                 if arrangement_is_drums(a):
                     continue
-                non_drum_found = True
                 c = len(a.notes) + sum(len(ch.notes) for ch in a.chords)
                 if c > best_count:
                     best_count = c
                     best = i
             # If all arrangements were drums (drum-only pack), fall back to the
-            # first arrangement. Use explicit flag to distinguish from a non-drum
-            # arrangement that happens to have zero notes.
-            if not non_drum_found and song.arrangements:
+            # first arrangement.
+            if best < 0 and song.arrangements:
                 best = 0
         arr = song.arrangements[best]
 

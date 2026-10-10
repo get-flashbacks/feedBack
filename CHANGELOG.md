@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Highway arrangement fallback excludes drum arrangements.** When no explicit arrangement is requested, the most-notes fallback now skips drum arrangements (detected via manifest `type: drums` or legacy name keywords) so songs open on a guitar/bass part instead of the drum part. Drum-only packs still fall back to the first arrangement.
 - **Keys Highway 3D: a mastery change no longer resets the run's score.** Hits, misses, streak and best streak now carry over when the mastery slider (or Difficulty Ladder's auto-adjust) rebuilds the playable notes, so the stats posted at song end cover the whole run (#94).
 - **Docker and Proxmox builds now include the starter feedpaks.** First-run seeding can find all listed sources instead of repeatedly warning that the packs are missing.
 
