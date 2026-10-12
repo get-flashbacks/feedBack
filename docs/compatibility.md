@@ -32,14 +32,19 @@ and `0.3.0-alpha.2` covers `ec1157a..d1980ff` (83 commits as of this audit), so
 one version string spans three of the seven APIs in this document.
 `0.3.0-alpha.2` is a truthful answer for the four upstream rows below (they all
 predate `ec1157a`) and an uninformative one for the three fork rows (they all
-postdate it). Until a release identifies a baseline —
-[#102](https://github.com/get-flashbacks/feedBack/issues/102)'s proposal — a
-commit hash is the only identity that answers the question.
+postdate it). Each matrix row now also names the distinct release that first
+contains its commit (see "Releases" below), so a version comparison against
+those tags answers the question without resolving a hash.
 
-This fork has **no tags and no releases of its own**, so a bare `feedBack`
-checkout is identified by `git rev-parse HEAD`. The only relevant tag lives
-upstream: `v0.3.0-alpha.1` = `b6169af6` (2026-07-03), which is 14 commits past
-`803bd0c` and contains **none** of the seven APIs below.
+This fork publishes per-commit prereleases for rows 1–5 and 7, plus the
+upstream `b6169af` baseline and the `605dbdf` drum-parts loader — eight
+releases in total, with row 6 covered only via the `e5339c0` baseline —
+under `get-flashbacks/feedBack` → Releases. A bare `feedBack` checkout
+without one
+of those tags is still identified by `git rev-parse HEAD`. The upstream tag
+`v0.3.0-alpha.1` = `b6169af6` (2026-07-03) is 14 commits past `803bd0c` and
+contains **none** of the seven APIs below; the fork's own
+`v0.3.0-alpha.1-b6169af` release points at the same commit.
 
 ## The matrix
 
@@ -197,12 +202,41 @@ cheapest single identity to name as "has everything in this table", which is why
 [#102](https://github.com/get-flashbacks/feedBack/issues/102) proposes it as a
 candidate baseline.
 
-It is **not** a certified baseline. `e5339c0` is a point on a moving branch: it
-is not tagged, not released, carries no `minHost` signal of its own, and nothing
-here has been exercised against a historical build. If a plugin needs to name a
-host to its users today, name the **row** it needs (`f7c761c` for Visual Export,
-`0dcc913` for Difficulty Ladder's backend) rather than the baseline — a row is
-a floor; the baseline is a moving target.
+It is published as release `v0.3.0-alpha.2-e5339c0` (2026-10-12), so a user
+can identify a compatible build from its release or commit. It remains
+**not certified**: nothing here has been exercised against a historical
+build (sub-issue 4, #134), it carries no `minHost` signal of its own
+(sub-issue 3, #133), and an incompatible feature must still explain its
+missing requirement at the call site (the required-vs-optional convention,
+`docs/plugin-host-compat.md`). If a plugin needs to name a host to its
+users today, name the **row** it needs (`f7c761c` for Visual Export,
+`0dcc913` for Difficulty Ladder's backend) — a row is a floor; the
+baseline release is the cheapest single build that clears every floor.
+
+## Releases
+
+Eight of the nine commits named in this document are published as distinct
+prerelease tags (`VERSION` + short SHA, chronological order) — eight
+releases total, covering every named commit except row 6 (`7633211`,
+`playerContexts`), which was not in the release list and so has no dedicated
+tag; its first containing release is the `e5339c0` baseline (it sits inside
+the 16-commit `f7c761c..e5339c0` window).
+All eight are prereleases under `get-flashbacks/feedBack` → Releases
+(2026-10-12); each tag triggers a `release.yml` Docker build that strips
+the leading `v`, so tag `v0.3.0-alpha.2-e5339c0` publishes image
+`ghcr.io/get-flashbacks/feedback:0.3.0-alpha.2-e5339c0` (drop the `v`
+when pulling).
+
+| Release | Commit | Contains |
+|---|---|---|
+| `v0.3.0-alpha.1-b6169af` | `b6169af6` (2026-07-03) | Upstream `v0.3.0-alpha.1` baseline — floor for Piano and basic Split Screen (no row needed) |
+| `v0.3.0-alpha.1-0dcc913` | `0dcc9136` (2026-07-10) | Row 1 (`dlc_paths`) |
+| `v0.3.0-alpha.1-d876ded` | `d876ded0` (2026-07-13) | Rows 1–2 (`read_member_bytes`) |
+| `v0.3.0-alpha.1-05be9eb` | `05be9ebd` (2026-07-19) | Rows 1–3 (`chart-transform`) |
+| `v0.3.0-alpha.1-605dbdf` | `605dbdfd` (2026-07-21) | Multi-drum-parts loader (no matrix row — feedpak 1.17.0 feature, same `VERSION` line) |
+| `v0.3.0-alpha.1-03e1c1d` | `03e1c1d5` (2026-07-22) | Rows 1–4 (`/ws/sync` relay) |
+| `v0.3.0-alpha.2-f7c761c` | `f7c761cf` (2026-09-17) | Row 5 (coordinated frames). Does NOT include row 6 (`playerContexts`) |
+| `v0.3.0-alpha.2-e5339c0` | `e5339c04` (2026-09-23) | **Baseline: all seven rows** (rolls up the 16-commit `f7c761c..e5339c0` window incl. row 6 + row 7) |
 
 ## `minHost` is metadata, not enforcement
 
@@ -294,9 +328,10 @@ corrections, and one date correction:
 | Upstream tag reference | `v0.3.0-alpha.1` = `b6169af6` (2026-07-03) |
 | Plugins audited | `difficulty_ladder` `9ac046a`, `lyrics-karaoke` `5e9d586`, `feedpakr` `29b0396`, `chordr` `bcf49fa`, `splitscreen` `1600e8c`, `visual_export` `a7bad12`, `piano` `fef98a2` (all default-branch HEADs, 2026-10-01/02) |
 | Method | `git log`/`git show` on each commit, `git merge-base --is-ancestor` against `e5339c0`; `gh api repos/got-feedback/feedBack/compare/<sha>...main` for the upstream/fork column; read of each plugin's `routes.py` / `screen.js` / `plugin.json` on its default branch |
+| Releases published | 8 prereleases (2026-10-12, #135): rows 1–5 + row 7 (baseline `v0.3.0-alpha.2-e5339c0`) + drum-parts `v0.3.0-alpha.1-605dbdf` + upstream baseline `v0.3.0-alpha.1-b6169af` (row 6 has no dedicated tag — first contained in the baseline) — see "Releases" above |
 | Not done | Running any plugin against any historical host build; any prerelease-aware version comparison; any enforcement change |
 
 Re-audit when any listed commit is superseded, when a plugin's default branch
-moves past the audited revision, or when a release finally names a baseline —
+moves past the audited revision, or when the baseline is certified (#133/#134) —
 at which point this document should collapse into a version-to-feature table
 and the `minHost` discussion should move to sub-issue 3.
