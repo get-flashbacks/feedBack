@@ -737,6 +737,18 @@
         return Math.round(hits * 100 * accuracyOf(hits, misses));
     }
 
+    // Scoring gate: a played note is judged only while the chart clock is
+    // advancing (feedBack#93). `isPlaying` is core's bundle.isPlaying,
+    // cached per frame in draw() as _lastIsPlaying. While paused, before
+    // Play, or after the song ends, any key the player touches is
+    // noodling — judging it would count misses against a frozen time and
+    // break the streak. `!== false` (not truthy) so a bundle that omits
+    // the field (downlevel host) keeps the old always-judge behavior,
+    // matching highway_3d's smoothNow gate.
+    function shouldJudgeNoteOn(isPlaying) {
+        return isPlaying !== false;
+    }
+
     // Judge a played MIDI note against the time-sorted flattened note list
     // (piano plugin _checkHit port, minus the guitar-wire chord path — keys
     // chords are already flattened to simultaneous notes). Returns the
@@ -2114,6 +2126,11 @@
         const _missedNoteKeys = new Set(); // …and swept-missed ones
         const _sweepCursor = { idx: 0 };   // monotonic miss-sweep position
         let _latestTime = 0;               // song time from the last draw bundle
+        // Core's bundle.isPlaying cached per frame in draw() (feedBack#93):
+        // true while the chart clock advances, false when paused / before
+        // Play / after the song ends. _handleNoteOn and the miss sweep
+        // both gate on this so noodling never scores.
+        let _lastIsPlaying = true;
         let _lastSceneWallMs = 0;          // wall clock of the last updateScene (seek detection)
         let _missFloor = null;             // no retroactive misses before this t
         const _rawToPlayed = new Map();    // raw midi → transposed midi (held)
@@ -3573,6 +3590,10 @@
             // Score against the mastery + hand-filtered subset. A note hidden
             // by either setting isn't expected play.
             if (!_notation || !_notation.playable.length) return;
+            // Not playing (paused / pre-Play / song ended — feedBack#93):
+            // the player is noodling. Skip judgment entirely so neither
+            // hits nor misses accrue and the streak survives.
+            if (!shouldJudgeNoteOn(_lastIsPlaying)) return;
             const key = judgeHit(_notation.playable, playedMidi, t, _hitNoteKeys, HIT_TOLERANCE_S);
             const wall = performance.now();
             if (key) {
@@ -3965,7 +3986,10 @@
 
             // Missed-note sweep — only while a MIDI device is connected
             // (without one, every note would count as a miss and corrupt
-            // accuracy), and never retroactively across a mid-song connect.
+            // accuracy), while the chart clock is advancing (feedBack#93: a
+            // paused / pre-Play clock would sweep every unplayed note at the
+            // frozen time as a miss), and never retroactively across a
+            // mid-song connect.
             // Only the focused instance scores: note-ons route solely to
             // _activeInstance, so sweeping misses anywhere else would accrue
             // misses with no possible hits and corrupt that run's stats
@@ -3983,7 +4007,8 @@
                 }
                 _lastSceneWallMs = wallMs;
             }
-            if (_midiHandle && _notation && _activeInstance === instance) {
+            if (_midiHandle && _notation && _activeInstance === instance
+                && shouldJudgeNoteOn(_lastIsPlaying)) {
                 if (_midiJustConnected) {
                     _missFloor = now;
                     _midiJustConnected = false;
@@ -4577,6 +4602,12 @@
                     }
                 }
                 const now = (bundle && typeof bundle.currentTime === 'number') ? bundle.currentTime : 0;
+                // Core's playback signal (feedBack#93): true while the chart
+                // clock advances, false when paused / before Play / after
+                // the song ends. Cached here so _checkHit (which a MIDI
+                // note-on can reach between frames) and the miss sweep in
+                // updateScene() share one value per frame.
+                _lastIsPlaying = bundle ? bundle.isPlaying : undefined;
                 {
                     // Cheap per-frame chart check (a string compare): load
                     // when this highway's song/arrangement differs from the
@@ -4752,6 +4783,7 @@
         scoreOf,
         judgeHit,
         matchesHiddenHandNote,
+        shouldJudgeNoteOn,
         sweepMissed,
         sweepStartIndex,
         classifySeek,

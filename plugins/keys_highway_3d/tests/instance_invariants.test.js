@@ -127,3 +127,20 @@ test('every noteMeshes/markerSprites reassignment resets its draw window', () =>
             `${m[1]} reassignment (line ${src.slice(0, m.index).split('\n').length}) must reset ${win} beside it`);
     }
 });
+
+test('scoring pauses when the chart clock is not advancing (#93)', () => {
+    // Pianists noodle while paused / before Play / after the song ends; the
+    // renderer's per-frame data already carries core's playback signal
+    // (bundle.isPlaying), so _checkHit and the miss sweep must both gate on
+    // it — otherwise every touched key counts as a miss at the frozen time
+    // and breaks the streak. A bundle that omits the field (downlevel host)
+    // keeps the old always-judge behavior.
+    const check = src.match(/function _checkHit\(playedMidi, t\)\s*\{[\s\S]*?\n {8}\}\n/);
+    assert.ok(check, '_checkHit not found');
+    assert.match(check[0], /if \(!shouldJudgeNoteOn\(_lastIsPlaying\)\) return;/);
+    const body = src.match(/function updateScene\(now\)\s*\{[\s\S]*?\n {8}\}\n/);
+    assert.ok(body, 'updateScene not found');
+    assert.match(body[0],
+        /_activeInstance === instance\s*\n\s*&& shouldJudgeNoteOn\(_lastIsPlaying\)\)/);
+    assert.match(src, /_lastIsPlaying = bundle \? bundle\.isPlaying : undefined;/);
+});
