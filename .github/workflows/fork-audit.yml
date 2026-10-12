@@ -47,6 +47,107 @@ jobs:
           done
           exit $fail
 
+  core-plugin-separation:
+    # Advisory only — never fails the PR. A commit that mixes core paths
+    # with plugins/** usually means feature logic landed inline in core
+    # that belongs in a plugin (or a hook + plugin pair of commits) —
+    # Rule 1. The reviewer decides whether the mix is justified (e.g. a
+    # hook consumed by a bundled plugin in the same commit).
+    name: core-plugin-separation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Warn on commits mixing core paths with plugins/
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          commits=$(git rev-list "$BASE_SHA".."$HEAD_SHA")
+
+          for sha in $commits; do
+            files=$(git show --name-only --pretty=format:"" "$sha")
+            core_hit=$(printf '%s\n' "$files" | grep -Ev '^(plugins/|docs/|tests/|scripts/|specs/|\.specify/)|^(CHANGELOG\.md|VERSION)$' || true)
+            plugin_hit=$(printf '%s\n' "$files" | grep -E '^plugins/' || true)
+            if [ -n "$core_hit" ] && [ -n "$plugin_hit" ]; then
+              subject=$(git show -s --format=%s "$sha")
+              echo "::warning::Commit $sha ('$subject') mixes core and plugins/ paths — see docs/fork-maintenance.md (Rule 1: hook injection over inline edits). Core: $(printf '%s' "$core_hit" | tr '\n' ' ')"
+            fi
+          done
+          exit 0
+
+  core-diff-size:
+    # Advisory only — never fails the PR. Reports the core-path line delta
+    # per introduced commit and warns past a threshold, as a nudge toward
+    # hook injection (P1) over inline edits (P3) — Rule 1. The threshold is
+    # intentionally generous: a real bug fix can be large, and the reviewer
+    # decides. Diff stat counts added+removed lines, so a pure move still
+    # shows up (correctly — a move is still merge surface).
+    name: core-diff-size
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Report core line delta per commit
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          commits=$(git rev-list "$BASE_SHA".."$HEAD_SHA")
+
+          for sha in $commits; do
+            core_files=$(git show --name-only --pretty=format:"" "$sha" | grep -Ev '^(plugins/|docs/|tests/|scripts/|specs/|\.specify/)|^(CHANGELOG\.md|VERSION)$' || true)
+            [ -z "$core_files" ] && continue
+            delta=$(git show --numstat --pretty=format:"" "$sha" | awk '{a+=$1; r+=$2} END {print a+r+0}')
+            subject=$(git show -s --format=%s "$sha")
+            echo "Commit $sha ('$subject'): ${delta} core line(s) changed."
+            if [ "$delta" -gt 300 ]; then
+              echo "::warning::Commit $sha ('$subject') changes ${delta} core lines (> 300). Prefer a minimal hook + plugin logic per docs/fork-maintenance.md (Rule 1) unless this is a genuine large bug fix."
+            fi
+          done
+          exit 0
+
+  core-change-trailer:
+    # Advisory only — never fails the PR. Rule 3 asks that every
+    # core:/hook:/fix: commit record its retire-debt decision at commit
+    # time: either an Upstream-PR: trailer (opened upstream, debt retires
+    # on merge) or an explicit Fork-Only: reason (fork-specific, no
+    # upstream PR will ever retire it). sync: commits are exempt — a merge
+    # has no upstream PR to point at.
+    name: core-change-trailer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Warn on core commits without an Upstream-PR or Fork-Only trailer
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          commits=$(git rev-list "$BASE_SHA".."$HEAD_SHA")
+
+          for sha in $commits; do
+            files=$(git show --name-only --pretty=format:"" "$sha")
+            core_hit=$(printf '%s\n' "$files" | grep -Ev '^(plugins/|docs/|tests/|scripts/|specs/|\.specify/)|^(CHANGELOG\.md|VERSION)$' || true)
+            [ -z "$core_hit" ] && continue
+            subject=$(git show -s --format=%s "$sha")
+            case "$subject" in sync:*|sync\(*\)*) continue;; esac
+            body=$(git show -s --format=%B "$sha")
+            if ! printf '%s' "$body" | grep -qiE '^(Upstream-PR|Fork-Only):'; then
+              echo "::warning::Commit $sha ('$subject') touches core but records no Upstream-PR: or Fork-Only: trailer — see docs/fork-maintenance.md (Rule 3). Add one to record the retire-debt decision."
+            fi
+          done
+          exit 0
+
   upstream-drift:
     # Advisory only — never fails the PR. Nudges toward Rule 4 (sync often,
     # in small increments) instead of letting drift build up silently.
