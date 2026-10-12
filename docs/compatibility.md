@@ -222,8 +222,10 @@ releases total, covering every named commit except row 6 (`7633211`,
 tag; its first containing release is the `e5339c0` baseline (it sits inside
 the 16-commit `f7c761c..e5339c0` window).
 All eight are prereleases under `get-flashbacks/feedBack` → Releases
-(2026-10-12); each tag triggers a `release.yml` Docker build
-(`ghcr.io/get-flashbacks/feedback:<tag>`).
+(2026-10-12); each tag triggers a `release.yml` Docker build that strips
+the leading `v`, so tag `v0.3.0-alpha.2-e5339c0` publishes image
+`ghcr.io/get-flashbacks/feedback:0.3.0-alpha.2-e5339c0` (drop the `v`
+when pulling).
 
 | Release | Commit | Contains |
 |---|---|---|
