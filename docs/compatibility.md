@@ -215,12 +215,12 @@ baseline release is the cheapest single build that clears every floor.
 
 ## Releases
 
-Seven of the eight commits named in this document are published as distinct
-prerelease tags (`VERSION` + short SHA, chronological order), plus the
-baseline itself — eight releases total. The one exception is row 6
-(`7633211`, `playerContexts`): it was not in the release list, so it has
-no dedicated tag — the first release containing it is the `e5339c0`
-baseline (it sits inside the 16-commit `f7c761c..e5339c0` window).
+Eight of the nine commits named in this document are published as distinct
+prerelease tags (`VERSION` + short SHA, chronological order) — eight
+releases total, covering every named commit except row 6 (`7633211`,
+`playerContexts`), which was not in the release list and so has no dedicated
+tag; its first containing release is the `e5339c0` baseline (it sits inside
+the 16-commit `f7c761c..e5339c0` window).
 All eight are prereleases under `get-flashbacks/feedBack` → Releases
 (2026-10-12); each tag triggers a `release.yml` Docker build
 (`ghcr.io/get-flashbacks/feedback:<tag>`).
