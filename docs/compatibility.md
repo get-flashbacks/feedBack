@@ -36,9 +36,11 @@ postdate it). Each matrix row now also names the distinct release that first
 contains its commit (see "Releases" below), so a version comparison against
 those tags answers the question without resolving a hash.
 
-This fork publishes per-commit prereleases for rows 1–5 plus the `e5339c0`
-baseline, with row 6 covered only via that baseline, under
-`get-flashbacks/feedBack` → Releases. A bare `feedBack` checkout without one
+This fork publishes per-commit prereleases for rows 1–5 and 7, plus the
+upstream `b6169af` baseline and the `605dbdf` drum-parts loader — eight
+releases in total, with row 6 covered only via the `e5339c0` baseline —
+under `get-flashbacks/feedBack` → Releases. A bare `feedBack` checkout
+without one
 of those tags is still identified by `git rev-parse HEAD`. The upstream tag
 `v0.3.0-alpha.1` = `b6169af6` (2026-07-03) is 14 commits past `803bd0c` and
 contains **none** of the seven APIs below; the fork's own
