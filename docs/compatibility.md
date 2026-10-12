@@ -326,7 +326,7 @@ corrections, and one date correction:
 | Upstream tag reference | `v0.3.0-alpha.1` = `b6169af6` (2026-07-03) |
 | Plugins audited | `difficulty_ladder` `9ac046a`, `lyrics-karaoke` `5e9d586`, `feedpakr` `29b0396`, `chordr` `bcf49fa`, `splitscreen` `1600e8c`, `visual_export` `a7bad12`, `piano` `fef98a2` (all default-branch HEADs, 2026-10-01/02) |
 | Method | `git log`/`git show` on each commit, `git merge-base --is-ancestor` against `e5339c0`; `gh api repos/got-feedback/feedBack/compare/<sha>...main` for the upstream/fork column; read of each plugin's `routes.py` / `screen.js` / `plugin.json` on its default branch |
-| Releases published | 8 prereleases (2026-10-12, #135): rows 1–5 + row 7 + drum-parts + baseline `v0.3.0-alpha.2-e5339c0` (row 6 has no dedicated tag — first contained in the baseline) — see "Releases" above |
+| Releases published | 8 prereleases (2026-10-12, #135): rows 1–5 + row 7 (baseline `v0.3.0-alpha.2-e5339c0`) + drum-parts `v0.3.0-alpha.1-605dbdf` + upstream baseline `v0.3.0-alpha.1-b6169af` (row 6 has no dedicated tag — first contained in the baseline) — see "Releases" above |
 | Not done | Running any plugin against any historical host build; any prerelease-aware version comparison; any enforcement change |
 
 Re-audit when any listed commit is superseded, when a plugin's default branch
