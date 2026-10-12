@@ -290,3 +290,15 @@ test('forward seek: re-anchoring the sweep does not dump skipped notes in as mis
     const cursor = { idx: sweepStartIndex(notes, 30, TOL) };
     assert.equal(sweepMissed(notes, 30.05, new Set(), new Set(), TOL, 30, null, cursor), 0);
 });
+
+test('shouldJudgeNoteOn: only an explicit false pauses scoring (feedBack#93)', () => {
+    const { shouldJudgeNoteOn } = load();
+    // Paused / pre-Play / song ended: noodling must not score.
+    assert.equal(shouldJudgeNoteOn(false), false);
+    // Playing.
+    assert.equal(shouldJudgeNoteOn(true), true);
+    // Downlevel host: bundle.isPlaying is undefined, so keep the old
+    // always-judge behavior rather than silencing scoring entirely.
+    assert.equal(shouldJudgeNoteOn(undefined), true);
+    assert.equal(shouldJudgeNoteOn(null), true);
+});
