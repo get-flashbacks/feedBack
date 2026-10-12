@@ -49,10 +49,10 @@ P2 instead.
    - `fix:` — a bug or security fix to core (P3; use `fix(security):` for
      security hotfixes following conventional-commit scope notation)
 
-   Commits that touch only `plugins/**` don't need a prefix (that's the
-   normal case and needs no special handling). This labeling is what lets
-   you `git log --grep -E '^(core|fix)(\([^)]*\))?:'` or cherry-pick your
-   minimal core diff onto a fresh upstream tag when things diverge badly.
+    Commits that touch only `plugins/**` don't need a prefix (that's the
+    normal case and needs no special handling). This labeling is what lets
+    you `git log --grep -E '^(core|hook|sync|fix)(\([^)]*\))?:'` or cherry-pick your
+    minimal core diff onto a fresh upstream tag when things diverge badly.
 
 3. **Upstream PRs retire debt.** Whenever a `core:`/`hook:`/`fix:` commit lands
    here, ask: *is this useful to anyone else running FeedBack?* If yes, open
@@ -111,32 +111,43 @@ Policy that isn't checked erodes. Two mechanisms enforce this one:
 
 - **`.github/workflows/fork-audit.yml`** — a fork-only CI workflow (does not
   touch or replace upstream's `ci.yml`/`ship-ci.yml`, to avoid creating a
-  conflict in the exact file this policy is trying to keep conflict-free):
-  - `core-commit-labeling` fails a PR if any commit it introduces (relative
-    to the PR base) touches a core path without a `core:`/`hook:`/`sync:`/
-    `fix:` prefix.
-  - `upstream-drift` is advisory-only: reports how many commits behind
-    `got-feedback/feedBack:main` this branch is, and warns (without failing)
-    once that count crosses a threshold, as a nudge for Rule 4.
+  conflict in the exact file this policy is trying to keep conflict-free).
+  The workflow's job names describe exactly what each job enforces — no job
+  claims to enforce the whole policy:
+  - `core-commit-labeling` (failing) — Rule 2: fails a PR if any commit it
+    introduces (relative to the PR base) touches a core path without a
+    `core:`/`hook:`/`sync:`/`fix:` prefix.
+  - `core-plugin-separation` (advisory warning) — Rule 1: warns when a single
+    commit mixes core paths with `plugins/**`, so feature logic that belongs
+    in a plugin (or a hook + plugin pair of commits) is visible at review.
+  - `core-diff-size` (advisory warning) — Rule 1: reports the core-path line
+    delta per commit and warns past a threshold, as a nudge toward hook
+    injection (P1) over inline edits (P3).
+  - `core-change-trailer` (advisory warning) — Rule 3: warns when a
+    `core:`/`hook:`/`fix:` commit carries neither an `Upstream-PR:` trailer
+    nor an explicit `Fork-Only:` reason, so the retire-debt decision is
+    recorded at commit time.
+  - `upstream-drift` (advisory-only) — Rule 4: reports how many commits
+    behind `got-feedback/feedBack:main` the PR base is, and warns (without
+    failing) once that count crosses a threshold, as a nudge to sync first.
+    Drift stays advisory: a hard gate would block urgent fork-only fixes
+    when upstream moves fast.
 - **`scripts/fork-sync.sh`** — sets up the `upstream` remote if missing and
   fetches/reports drift, so P0 syncs are a one-command habit rather than a
   thing you have to remember how to do.
 
-## Current state (as of the last audit)
+What CI does NOT check (reviewer responsibility): whether a core edit is
+genuinely upstream-worthy vs fork-specific (Rule 3's judgment call), and
+whether a core/plugin coupling is declared in compatibility metadata
+(tracked by #102, not inferable from file paths at audit time).
 
-Recorded here so the next audit has a baseline to diff against, not as a
-permanent record — update or delete this section once it's stale.
+## Current state
 
-- No `upstream` remote was configured in this fork as of 2026-08-02, despite
-  `CLAUDE.md` documenting the `origin`/`upstream` split as the intended
-  convention. `scripts/fork-sync.sh` fixes this on first run.
-- Three fork-only commits existed on `main` at audit time, all direct core
-  edits with no `core:`/`hook:` labeling (predating this policy, so not
-  retroactively flagged by CI):
-  - `830a708` — Guitar Pro strum-direction import (`lib/gp2rs.py`,
-    `lib/gp2rs_gpx.py`). Real feature logic in a converter core owns; a
-    reasonable upstream PR candidate under Rule 3.
-  - `5b443e9` — null-check fix in `lib/routers/ws_highway.py`. A genuine bug
-    fix (P3's legitimate exception) — a good candidate to send upstream.
-  - `b9e7c3d` — `Dockerfile` FFmpeg asset fix. Build-only, low conflict risk,
-    also a reasonable upstream PR candidate.
+Live fork state (drift, commit counts) is intentionally NOT snapshotted
+here: a committed snapshot goes stale the moment either side moves — as
+happened to the 2026-08-02 snapshot this section replaces (it claimed no
+`upstream` remote and three fork-only commits, both long out of date).
+For current state, run `scripts/fork-sync.sh --report-only` (drift vs
+upstream) and `git log --grep -E '^(core|hook|sync|fix)(\([^)]*\))?:'`
+(labeled core history). CI's `upstream-drift` job reports the same drift
+per PR.
