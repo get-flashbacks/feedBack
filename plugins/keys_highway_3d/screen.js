@@ -3384,7 +3384,7 @@
 
         // Switch this instance's hand filter. A no-op when unchanged, so a
         // host re-applying the same value (splitscreen restores on every
-        // provider refresh) can't reset scoring mid-song. Meshes are rebuilt
+        // provider refresh) can't touch scoring mid-song. Meshes are rebuilt
         // only once the scene exists; before that, the next build reads the
         // refiltered `playable`.
         function _setHandFilter(next) {
@@ -3395,9 +3395,19 @@
             if (!notesGroup) return;
             const curTime = _latestTime;
             buildNoteMeshes();
-            _resetScoring();
-            // same as the mastery path: resume the sweep where playback is
-            // now — notes already elapsed must not re-sweep as misses
+            // Same as the mastery path, this is the SAME run: hits / misses
+            // / streak / best streak carry over, so changing the hand filter
+            // during play doesn't wipe the score (and the stats posted at
+            // song end cover the whole run). The judged-note sets are keyed
+            // by noteKey(t, midi), not by list index, so they stay valid
+            // across the new playable set — and keeping them stops a note
+            // already judged from being counted again if a later hand change
+            // brings it back into view. The miss sweep only runs over the
+            // visible `playable`, so a note hidden by the filter can never
+            // accrue a miss while hidden. Only the sweep cursor indexes the
+            // old list, so re-anchor it: playback kept advancing, and notes
+            // the player already passed must not be retroactively counted
+            // as misses.
             _anchorMissSweep(curTime);
         }
 
@@ -3631,13 +3641,12 @@
         // miss sweep at the current playback position instead of the list
         // head. _resetScoring() rewinds _sweepCursor to 0 — right for a fresh
         // chart, wrong here, where playback keeps advancing: a sweep from 0
-        // against a just-emptied _hitNoteKeys/_missedNoteKeys would re-mark
-        // every already-elapsed visible note (including ones already hit) as
-        // a miss and tank the run's accuracy. The floor keeps the tolerance
-        // band around the change retro-free (a "run restart", matching what
-        // the reset already does to hits/streak), and _latestTime is restored
-        // so a note-on landing before the next draw still judges against real
-        // song time, not the reset's 0.
+        // would re-mark every already-elapsed visible note never judged
+        // (including ones the previous filter hid and this change just
+        // revealed) as a miss and tank the run's accuracy. The floor keeps
+        // the tolerance band around the change retro-free, and _latestTime
+        // is restored so a note-on landing before the next draw still
+        // judges against real song time.
         function _anchorMissSweep(now) {
             _sweepCursor.idx = sweepStartIndex(_notation && _notation.playable, now, HIT_TOLERANCE_S);
             if (Number.isFinite(Number(now))) {

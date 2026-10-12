@@ -75,6 +75,19 @@ test('a mastery change keeps the run totals instead of resetting scoring', () =>
     assert.match(fn[0], /_anchorMissSweep\(now\)/);
 });
 
+test('a hand-filter change keeps the run totals instead of resetting scoring (#130)', () => {
+    // Same shape as the mastery path: changing Both / LH / RH mid-song
+    // rebuilds the playable notes, so wiping hits/misses/streak made the
+    // posted stats cover only the time since the change. Judged-note keys
+    // are (t, midi)-keyed so they survive the rebuild; the miss sweep only
+    // runs over the visible playable, so a hidden-hand note can never
+    // accrue a miss while hidden. Only the sweep cursor needs re-anchoring.
+    const fn = src.match(/function _setHandFilter\(next\)\s*\{[\s\S]*?\n {8}\}\n/);
+    assert.ok(fn, '_setHandFilter not found');
+    assert.doesNotMatch(fn[0], /_resetScoring\(\)/);
+    assert.match(fn[0], /_anchorMissSweep\(curTime\)/);
+});
+
 test('updateScene windows its arrays instead of walking every note (feedBack#95)', () => {
     // The window helpers are pure and unit-tested in data_layer.test.js, but
     // nothing there can catch them being exported and never wired up — the
