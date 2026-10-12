@@ -114,11 +114,14 @@ import {
     _sectionPracticeStartTime,
     _setSectionPracticeMode,
     _syncSectionPracticeFromLoop,
+    _syncSectionPracticeOverride,
     _updateSectionPracticeHighlight,
     invalidateParentCount,
     onPhraseNext,
     onPhrasePrev,
     onSectionParentClick,
+    onSectionPracticeDifficultyInput,
+    onSectionPracticeDifficultyToggle,
     onSectionPracticeModeChange,
     onSectionPracticeWholeChange,
     practiceSection,
@@ -1595,6 +1598,10 @@ if (window.feedBack) {
     // handler receives an Event, not the raw payload.
     window.feedBack.on('song:ready', (e) => {
         _applyMasteryAvailability(!!e.detail?.hasPhraseData);
+        // Phrase data is finally known here, so a Section Practice difficulty
+        // pin that was armed before the ladder streamed in can activate now
+        // (and one armed on a chart with no ladder stays correctly inert).
+        _syncSectionPracticeOverride();
         // Auto mode: re-evaluate the active renderer against the
         // newly-loaded song. The picker's current <option> value is the
         // source of truth here — localStorage is a persistence mirror
@@ -1784,6 +1791,8 @@ window.returnToEditorFromHighway = returnToEditorFromHighway;
 
 window.onSectionParentClick = onSectionParentClick;
 window.onSectionPracticeWholeChange = onSectionPracticeWholeChange;
+window.onSectionPracticeDifficultyToggle = onSectionPracticeDifficultyToggle;
+window.onSectionPracticeDifficultyInput = onSectionPracticeDifficultyInput;
 window.onPhrasePrev = onPhrasePrev;
 window.onPhraseNext = onPhraseNext;
 

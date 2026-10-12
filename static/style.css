@@ -293,6 +293,54 @@ html { scroll-behavior: smooth; }
     font-weight: 500;
 }
 
+/* Manual practice-difficulty pin (feedBack#140): a checkbox that enables the
+   pin plus a percentage slider. Off by default so the override is inert. */
+.section-practice-diff-wrap {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    color: #9ca3af;
+    flex-shrink: 0;
+}
+
+.section-practice-diff-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.section-practice-diff-toggle input[type="checkbox"] {
+    accent-color: #4080e0;
+}
+
+.section-practice-diff-text {
+    font-weight: 500;
+}
+
+.section-practice-diff-range {
+    width: 84px;
+    accent-color: #4080e0;
+}
+
+.section-practice-diff-range:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+.section-practice-diff-value {
+    min-width: 2.25rem;
+    font-variant-numeric: tabular-nums;
+    color: #6b7280;
+}
+
+.section-practice-diff-wrap--on .section-practice-diff-value {
+    color: #93c5fd;
+    font-weight: 600;
+}
+
 .button-icon-svg {
     width: 14px;
     height: 14px;

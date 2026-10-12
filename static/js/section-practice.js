@@ -30,6 +30,7 @@ import { esc } from './dom.js';
 import { _audioDuration, _audioTime, audioSeekGen } from './transport.js';
 import { formatTime } from './format.js';
 import { host } from './host.js';
+import { createSectionPracticeDifficulty } from './section-practice-difficulty.js';
 
 export function _sectionPracticeBarContains(el) {
     if (!el) return false;
@@ -72,6 +73,18 @@ let _sectionPracticeRequestGen = 0;
 // section state and applies it once its own gen check passes.
 let _sectionPracticeRequestInFlight = 0;
 
+// Manual difficulty pin for the looped section (feedBack#140). `null` = follow
+// the song-wide mastery slider (no override), which is the default and keeps
+// the feature byte-for-byte inert. A finite 0–100 value drives a
+// practice-difficulty override for the active loop.
+let _sectionPracticeDifficultyPct = null;
+const SECTION_PRACTICE_DIFFICULTY_DEFAULT = 50;
+
+// Producer-side bookkeeping for the practice-difficulty capability: which loop
+// window the override belongs to, and idempotent activate/clear. See
+// ./section-practice-difficulty.js.
+const _sectionPracticeDifficulty = createSectionPracticeDifficulty();
+
 export function _setSectionPracticeMode(on, opts = {}) {
     const next = !!on;
     if (next === _sectionPracticeMode && !opts.force) return;
@@ -106,6 +119,11 @@ export function _setSectionPracticeMode(on, opts = {}) {
         _sectionPracticeSelected = -1;
         _sectionPracticeWholeSection = false;
         _sectionPracticeSavedPartIndex = 0;
+        // Drop the capability override this loop may be holding. Idempotent, so
+        // the several teardown funnels that route here (mode toggle off,
+        // clearLoop, _hideSectionPracticeBar on song/arrangement change) can each
+        // call it safely. The pin preference is left alone.
+        _sectionPracticeClearOverride('mode-off');
         _updateSectionPracticeHighlight(_audioTime());
         if (!opts.skipClearLoop && (host.loopA() !== null || host.loopB() !== null)) {
             host.clearLoop();
@@ -426,6 +444,133 @@ function _sectionPracticeResolveLoopTarget(index, opts = {}) {
     return _sectionPracticeRanges[index] ?? null;
 }
 
+// ── Practice difficulty override (feedBack#140) ─────────────────────────────
+// Section Practice is the PRODUCER for the practice-difficulty capability
+// (feedBack#136): when the user has pinned a difficulty for practice and a
+// section loop is live, the looped window plays at that pinned percentage while
+// the song-wide slider keeps its value everywhere else. All the cross-plugin
+// work happens through the capability — this module never writes a highway's
+// difficulty directly.
+
+// The desired override for the CURRENT loop + pin, or null when there is
+// nothing to pin. Every early return here is a deliberate "no override":
+//   * no pin set (the default — feature inert),
+//   * Section Practice mode off (a loop without practice is not a practice
+//     override),
+//   * no loop / a malformed window (the domain refuses those anyway),
+//   * a chart whose phrases never vary — an override re-levels phrases, so on a
+//     single-difficulty chart it would hold a slot that reports as active while
+//     changing nothing (`highway.hasPhraseData()` is the canonical gate).
+function _sectionPracticeOverrideTarget() {
+    if (_sectionPracticeDifficultyPct === null) return null;
+    if (!_sectionPracticeMode) return null;
+    const start = host.loopA();
+    const end = host.loopB();
+    if (start === null || end === null) return null;
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
+    const hw = _sectionPracticeHighway();
+    if (!hw || typeof hw.hasPhraseData !== 'function' || !hw.hasPhraseData()) return null;
+    return {
+        difficultyPct: _sectionPracticeDifficultyPct,
+        startTime: start,
+        endTime: end,
+        phraseIndices: _sectionPracticePhraseIndices(start, end),
+        label: _sectionPracticeOverrideLabel(),
+    };
+}
+
+// Phrase indices overlapping the loop window — descriptive metadata only; the
+// domain treats the time bounds as canonical. Capped so a whole-song loop can't
+// ship an unbounded array into the event payload.
+function _sectionPracticePhraseIndices(start, end) {
+    const phrases = _sectionPracticeSourcePhrases();
+    if (!phrases) return [];
+    const out = [];
+    for (const ph of phrases) {
+        if (ph.start_time >= start - 0.001 && ph.start_time < end - 0.001) out.push(ph.index);
+        if (out.length >= 64) break;
+    }
+    return out;
+}
+
+function _sectionPracticeOverrideLabel() {
+    const parents = _buildSectionParents();
+    const parent = _sectionPracticeActiveParent >= 0 ? parents[_sectionPracticeActiveParent] : null;
+    const name = parent && parent.name ? ` · ${parent.name}` : '';
+    return `Section practice${name}`;
+}
+
+// Reconcile the live override with the current loop + pin. Safe to call on every
+// Section Practice re-render: the bridge dedupes by window+percentage and
+// clear() is idempotent. Exported so app.js can re-run it on `song:ready`, the
+// point phrase data (and therefore `hasPhraseData()`) is finally known.
+export function _syncSectionPracticeOverride() {
+    return _sectionPracticeDifficulty.sync(_sectionPracticeOverrideTarget());
+}
+
+// Release the capability override, at most once. Does NOT touch the pin itself —
+// the pin is a session preference the user set, and is only dropped by the
+// uncheck handler or on song/arrangement teardown.
+function _sectionPracticeClearOverride(reason) {
+    return _sectionPracticeDifficulty.clear(reason || 'section-practice-teardown');
+}
+
+function _sectionPracticeDifficultyControlHtml() {
+    return '<span class="section-practice-diff-wrap">'
+        + '<label class="section-practice-diff-toggle" title="Pin the looped section to a fixed difficulty '
+        + '(only charts with phrase difficulty levels change)">'
+        + '<input type="checkbox" id="section-practice-diff-on" onchange="onSectionPracticeDifficultyToggle()">'
+        + '<span class="section-practice-diff-text">Difficulty</span>'
+        + '</label>'
+        + '<input type="range" id="section-practice-diff" class="section-practice-diff-range"'
+        + ' min="0" max="100" step="5" value="' + SECTION_PRACTICE_DIFFICULTY_DEFAULT + '"'
+        + ' oninput="onSectionPracticeDifficultyInput()" disabled aria-label="Practice difficulty percentage">'
+        + '<span id="section-practice-diff-value" class="section-practice-diff-value" aria-live="polite">Off</span>'
+        + '</span>';
+}
+
+function _syncSectionPracticeDifficultyUi() {
+    const cb = document.getElementById('section-practice-diff-on');
+    const slider = document.getElementById('section-practice-diff');
+    const label = document.getElementById('section-practice-diff-value');
+    const on = _sectionPracticeDifficultyPct !== null;
+    if (cb) cb.checked = on;
+    if (slider) {
+        slider.disabled = !on;
+        if (on) slider.value = String(_sectionPracticeDifficultyPct);
+    }
+    if (label) label.textContent = on ? `${Math.round(_sectionPracticeDifficultyPct)}%` : 'Off';
+    const wrap = cb && cb.closest ? cb.closest('.section-practice-diff-wrap') : null;
+    if (wrap) wrap.classList.toggle('section-practice-diff-wrap--on', on);
+}
+
+export function onSectionPracticeDifficultyToggle() {
+    const cb = document.getElementById('section-practice-diff-on');
+    if (!cb) return;
+    if (cb.checked) {
+        const slider = document.getElementById('section-practice-diff');
+        const v = slider ? Number(slider.value) : NaN;
+        _sectionPracticeDifficultyPct = Number.isFinite(v)
+            ? Math.max(0, Math.min(100, v))
+            : SECTION_PRACTICE_DIFFICULTY_DEFAULT;
+    } else {
+        _sectionPracticeDifficultyPct = null;
+    }
+    _syncSectionPracticeDifficultyUi();
+    _syncSectionPracticeOverride();
+}
+
+export function onSectionPracticeDifficultyInput() {
+    const cb = document.getElementById('section-practice-diff-on');
+    if (!cb || !cb.checked) return;
+    const slider = document.getElementById('section-practice-diff');
+    const v = slider ? Number(slider.value) : NaN;
+    if (!Number.isFinite(v)) return;
+    _sectionPracticeDifficultyPct = Math.max(0, Math.min(100, v));
+    _syncSectionPracticeDifficultyUi();
+    _syncSectionPracticeOverride();
+}
+
 function _formatSectionPracticeName(name) {
     return name.replace(/_/g, ' ');
 }
@@ -471,12 +616,14 @@ function _migrateSectionPracticeDomLayout(bar) {
     const scroll = document.getElementById('section-practice-scroll');
     const modeWrap = bar.querySelector('.section-practice-mode-wrap');
     const wholeWrap = bar.querySelector('.section-practice-whole-wrap');
+    const diffWrap = bar.querySelector('.section-practice-diff-wrap');
     let label = bar.querySelector('.section-practice-label');
 
     const controlsRow = document.createElement('div');
     controlsRow.className = 'section-practice-row section-practice-controls-row';
     if (modeWrap) controlsRow.appendChild(modeWrap);
     if (wholeWrap) controlsRow.appendChild(wholeWrap);
+    if (diffWrap) controlsRow.appendChild(diffWrap);
     if (pieceRow) controlsRow.appendChild(pieceRow);
 
     const chipsRow = document.createElement('div');
@@ -501,6 +648,7 @@ function _sectionPracticeBarInnerHtml() {
         + '<span class="section-practice-mode-text">Practice Section</span>'
         + '</label>'
         + _sectionPracticeWholeCheckboxHtml()
+        + _sectionPracticeDifficultyControlHtml()
         + _sectionPracticePieceRowHtml()
         + '</div>'
         + '<div class="section-practice-row section-practice-chips-row">'
@@ -527,6 +675,27 @@ function _ensureSectionPracticeWholeCheckbox() {
         modeWrap.insertAdjacentHTML('afterend', _sectionPracticeWholeCheckboxHtml());
     } else {
         mainRow.insertAdjacentHTML('afterbegin', _sectionPracticeWholeCheckboxHtml());
+    }
+}
+
+function _ensureSectionPracticeDifficultyControl() {
+    const existing = document.getElementById('section-practice-diff-on');
+    const mainRow = _sectionPracticeMainRow();
+    if (!mainRow) return;
+    if (existing) {
+        const wrap = existing.closest('.section-practice-diff-wrap');
+        if (wrap && !mainRow.contains(wrap)) {
+            const wholeWrap = mainRow.querySelector('.section-practice-whole-wrap');
+            if (wholeWrap) wholeWrap.insertAdjacentElement('afterend', wrap);
+            else mainRow.appendChild(wrap);
+        }
+        return;
+    }
+    const wholeWrap = mainRow.querySelector('.section-practice-whole-wrap');
+    if (wholeWrap) {
+        wholeWrap.insertAdjacentHTML('afterend', _sectionPracticeDifficultyControlHtml());
+    } else {
+        mainRow.insertAdjacentHTML('beforeend', _sectionPracticeDifficultyControlHtml());
     }
 }
 
@@ -690,6 +859,8 @@ function _ensureSectionPracticeDom() {
             }
         }
         _ensureSectionPracticeWholeCheckbox();
+        _ensureSectionPracticeDifficultyControl();
+        _syncSectionPracticeDifficultyUi();
         bar.querySelector('.section-practice-show-all-wrap')?.remove();
         _placeSectionPracticeControlForChrome();
         return bar;
@@ -791,6 +962,13 @@ function _installSectionPracticeDismiss() {
 
 export function _hideSectionPracticeBar() {
     _setSectionPracticeMode(false, { skipClearLoop: true });
+    // Song / arrangement teardown funnel. _setSectionPracticeMode(false) already
+    // clears when it was on, but it early-returns when already off, so clear the
+    // capability override explicitly here too (idempotent). The session pin is
+    // deliberately NOT reset: _hideSectionPracticeBar also runs transiently when
+    // a bar re-render finds no parents yet, and losing the user's pin there would
+    // be a bug. The pin is dropped only when the user unchecks it.
+    _sectionPracticeClearOverride('bar-hidden');
     _closeSectionPracticePopover();
     const ctrl = document.getElementById('section-practice-control');
     if (ctrl) {
@@ -916,6 +1094,7 @@ export function renderSectionPracticeBar() {
     // matching one; run it before the piece UI so that reflects the result.
     _syncSectionPracticeFromLoop();
     _syncSectionPracticePieceUi();
+    _syncSectionPracticeDifficultyUi();
     _updateSectionPracticeHighlight(_audioTime());
 }
 
@@ -1076,6 +1255,11 @@ export async function practiceSection(index, opts = {}) {
         }
         _blurSectionPracticeFocusIfNeeded();
         _updateSectionPracticeHighlight(_audioTime());
+        // Only now that the loop is CONFIRMED (setLoop landed and the gen checks
+        // passed) may the difficulty override go live. Activating before this
+        // point would leave a pinned override behind on a failed loop — exactly
+        // the leak the acceptance criteria forbid.
+        _syncSectionPracticeOverride();
         host.startCountIn({ immediate: true });
     } else {
         _setSectionPracticeMode(false, { skipClearLoop: true });
@@ -1122,6 +1306,11 @@ export function _syncSectionPracticeFromLoop() {
     } else if (_sectionPracticeMode) {
         _setSectionPracticeMode(false, { skipClearLoop: true });
     }
+    // A loop this feature recognized — including one armed elsewhere (Saved
+    // Loops / window.feedBack.setLoop()) that matches a section — is Section
+    // Practice as far as the pin is concerned, so reconcile the override here.
+    // When it does not match, mode was just turned off above (which cleared it).
+    _syncSectionPracticeOverride();
     _updateSectionPracticeHighlight(_audioTime());
 }
 
