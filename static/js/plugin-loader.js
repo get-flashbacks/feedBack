@@ -169,7 +169,12 @@ export async function loadPlugins() {
                 }
                 window.feedBack._minHostWarned = true;
             }
-        } catch (_e) { /* diagnostic-only; never break plugin loading */ }
+        } catch (_e) {
+            // Diagnostic-only; never break plugin loading. Debug-log the
+            // skip (a real statement, not an empty catch) so a silent
+            // version-fetch failure is still visible with verbose logging.
+            console.debug('[feedBack] minHost diagnostic skipped:', _e?.message || _e);
+        }
 
         try {
             const capabilityApi = window.feedBack?.capabilities;
