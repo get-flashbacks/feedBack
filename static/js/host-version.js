@@ -78,7 +78,7 @@ export function minHostStatus(minHost, hostVersion) {
     if (classifyMinHost(minHost) !== 'real') return classifyMinHost(minHost);
     try {
         return compareHostVersions(hostVersion, minHost) >= 0 ? 'ok' : 'unmet';
-    } catch (_e) {
+    } catch {
         return 'ok';
     }
 }
