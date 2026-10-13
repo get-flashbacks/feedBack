@@ -72,6 +72,59 @@ def _parse(version: str) -> tuple[list[int], list[str | int]] | None:
     return core, pre
 
 
+def _compare_cores(core_a: list[int], core_b: list[int]) -> int | None:
+    """Numeric left-to-right core ordering (missing parts are zero).
+
+    Returns -1/0/1, or None when the cores tie and the prerelease
+    decides.
+    """
+    width = max(len(core_a), len(core_b))
+    padded_a = core_a + [0] * (width - len(core_a))
+    padded_b = core_b + [0] * (width - len(core_b))
+    if padded_a == padded_b:
+        return None
+    return -1 if padded_a < padded_b else 1
+
+
+def _compare_ident(ident_a: str | int, ident_b: str | int) -> int | None:
+    """One prerelease-identifier step (semver §11).
+
+    Numeric identifiers compare numerically and sort below
+    alphanumeric ones; alphanumerics compare lexically. None means
+    this pair ties — keep walking.
+    """
+    if ident_a == ident_b:
+        return None
+    num_a = isinstance(ident_a, int)
+    num_b = isinstance(ident_b, int)
+    if num_a and num_b:
+        return -1 if ident_a < ident_b else 1
+    if num_a:
+        return -1
+    if num_b:
+        return 1
+    return -1 if ident_a < ident_b else 1
+
+
+def _compare_prereleases(pre_a: list[str | int], pre_b: list[str | int]) -> int:
+    """Prerelease ordering once the cores tie: a release sorts after
+    any prerelease of the same core; identifier lists compare
+    element-wise, then fall back to length."""
+    if not pre_a and not pre_b:
+        return 0
+    if not pre_a:
+        return 1
+    if not pre_b:
+        return -1
+    for ident_a, ident_b in zip(pre_a, pre_b):
+        step = _compare_ident(ident_a, ident_b)
+        if step is not None:
+            return step
+    if len(pre_a) == len(pre_b):
+        return 0
+    return -1 if len(pre_a) < len(pre_b) else 1
+
+
 def compare_host_versions(a: str, b: str) -> int:
     """Order two bare versions: -1 if a < b, 0 if equal, 1 if a > b.
 
@@ -91,36 +144,10 @@ def compare_host_versions(a: str, b: str) -> int:
         raise ValueError(f"not a bare version: {a!r}")
     if parsed_b is None:
         raise ValueError(f"not a bare version: {b!r}")
-    core_a, pre_a = parsed_a
-    core_b, pre_b = parsed_b
-    width = max(len(core_a), len(core_b))
-    core_a += [0] * (width - len(core_a))
-    core_b += [0] * (width - len(core_b))
-    if core_a != core_b:
-        return -1 if core_a < core_b else 1
-    if not pre_a and not pre_b:
-        return 0
-    # A release sorts after any prerelease of the same core.
-    if not pre_a:
-        return 1
-    if not pre_b:
-        return -1
-    for ident_a, ident_b in zip(pre_a, pre_b):
-        if ident_a == ident_b:
-            continue
-        num_a = isinstance(ident_a, int)
-        num_b = isinstance(ident_b, int)
-        if num_a and num_b:
-            return -1 if ident_a < ident_b else 1
-        # Numeric identifiers sort below alphanumeric ones (semver §11).
-        if num_a:
-            return -1
-        if num_b:
-            return 1
-        return -1 if ident_a < ident_b else 1
-    if len(pre_a) == len(pre_b):
-        return 0
-    return -1 if len(pre_a) < len(pre_b) else 1
+    core_result = _compare_cores(parsed_a[0], parsed_b[0])
+    if core_result is not None:
+        return core_result
+    return _compare_prereleases(parsed_a[1], parsed_b[1])
 
 
 def classify_min_host(raw) -> str:
