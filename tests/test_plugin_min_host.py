@@ -64,13 +64,16 @@ def test_compare_host_versions(a, b, want):
 
 
 def test_compare_host_versions_rejects_non_bare():
-    for bad in [">=1.2", "^0.3", "~1.0", "abc", "1.2-beta!", "", "1.0.0 ", "1..0"]:
-        if bad == "1.0.0 ":
-            continue  # trailing whitespace is stripped, not rejected
+    for bad in [">=1.2", "^0.3", "~1.0", "abc", "1.2-beta!", "", "1..0"]:
         with pytest.raises(ValueError):
             compare_host_versions(bad, "1.0.0")
     with pytest.raises(ValueError):
         compare_host_versions("1.0.0", ">=1.2")
+
+
+def test_compare_host_versions_tolerates_surrounding_whitespace():
+    # Cosmetic padding is stripped, not rejected.
+    assert compare_host_versions("  0.3.0-alpha.2 ", "0.3.0-alpha.2") == 0
 
 
 # ── value classes ───────────────────────────────────────────────────────
