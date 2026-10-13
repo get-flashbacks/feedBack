@@ -86,10 +86,15 @@
         const entry = players.get(context?.player_id);
         return entry && fields.every(f => entry.context[f] === text(context[f])) ? entry.highway : null;
     }
-    function updateActive(id, patch) {
+    function updateActive(id, patch, source) {
+        // Ownership-checked mutation (#104): the producer source is required
+        // and must match the entry's owner, exactly like upsert()/leave().
+        // The old two-arg form silently reused entry.source, letting any
+        // script mutate a context owned by another producer. Callers holding
+        // a context created via up(..., source) pass that same source back.
         const entry = players.get(id);
-        if (!entry || !patch || typeof patch !== 'object') return null;
-        return upsert({ ...patch, player_id: id }, undefined, entry.source);
+        if (!entry || !patch || typeof patch !== 'object' || typeof source !== 'string' || entry.source !== source) return null;
+        return upsert({ ...patch, player_id: id }, undefined, source);
     }
     function difficulty(request) {
         const context = request?.player_context;
@@ -146,14 +151,31 @@
         // including split-screen panels, which is exactly the concurrent-play
         // case this capability exists to serve. window.highway itself always
         // stays bound to the main player, so its OWN getSongInfo() is
-        // authoritative for arrangement/instrument (used below); but there is
-        // no per-instance filename exposed to cross-check song_id against, so
-        // reject a panel-fired event for a genuinely different song using the
-        // title/artist window.highway actually reports (present once its own
-        // song_info has arrived). A panel showing a different ARRANGEMENT of
-        // the SAME song -- the normal multi-panel case -- still passes.
-        if (info.title != null && text(info.title) !== text(song.title)) return;
-        if (info.artist != null && text(info.artist) !== text(song.artist)) return;
+        // authoritative for arrangement/instrument (used below); and its OWN
+        // getFilename() (highway.js, derived from its WebSocket URL) is
+        // authoritative for identity. Accept an event only when it names the
+        // file the main highway actually holds — two distinct chart files
+        // with identical title/artist (#104) then route correctly, where the
+        // old display-metadata comparison corrupted the main context with the
+        // panel filename. A panel playing the SAME file still passes, which
+        // is harmless: song_id matches and the arrangement below comes from
+        // main's own getSongInfo(), never from the broadcast.
+        let own = null;
+        try { own = window.highway?.getFilename?.() ?? null; } catch { own = null; }
+        if (typeof own === 'string' && own) {
+            if (text(song.filename) !== own) return;
+        } else if (window.highway?.getFilename) {
+            // Main highway connected but holding no file yet (between songs):
+            // nothing verifiable — a panel broadcast must not publish main.
+            return;
+        } else {
+            // Pre-provenance highway (no getFilename at all, e.g. legacy
+            // hosts): fall back to the old title/artist rejection so the
+            // main context still publishes. Weaker, but only where the
+            // provenance API does not exist.
+            if (info.title != null && text(info.title) !== text(song.title)) return;
+            if (info.artist != null && text(info.artist) !== text(song.artist)) return;
+        }
         const type = resolveType(info, song);
         const instrument = classifyInstrument(type);
         upsert({ player_id: 'main', song_id: song.filename,

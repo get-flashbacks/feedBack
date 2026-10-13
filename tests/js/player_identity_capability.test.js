@@ -68,7 +68,7 @@ test('player difficulty requires the complete current identity and routes to one
     assert.equal(handled.outcome, 'handled');
     assert.equal(mastery, 0.64);
 
-    window.feedBack.playerContexts.updateActive('player-2', { arrangement_id: 'rhythm' });
+    window.feedBack.playerContexts.updateActive('player-2', { arrangement_id: 'rhythm' }, 'plugin.splitscreen');
     mastery = null;
     const stale = await window.feedBack.capabilities.dispatch({
         capability: 'player-difficulty.v1', command: 'set', source: 'test',
@@ -186,4 +186,86 @@ test('a panel highway broadcasting a DIFFERENT ARRANGEMENT of the SAME song stil
     window.feedBack.currentSong = { filename: 'song.feedpak', title: 'Shared Song', artist: 'Shared Artist', arrangement: 'Rhythm', arrangementIndex: 1 };
     window.feedBack.emit('song:loaded');
     assert.equal(window.feedBack.playerContexts.getActive('main').arrangement_id, '1');
+});
+
+test('updateActive requires the owning source — a foreign source cannot mutate the context (#104)', () => {
+    const window = load();
+    window.feedBack.playerContexts.upsert({
+        player_id: 'panel', profile_id: 'alex', song_id: 'song.feedpak',
+        arrangement_id: 'lead', instrument: 'guitar',
+    }, {}, 'plugin.owner');
+
+    // The issue's reproduction: no source at all, then a foreign source.
+    assert.equal(window.feedBack.playerContexts.updateActive('panel', { song_id: 'evil' }), null);
+    assert.equal(window.feedBack.playerContexts.updateActive('panel', { song_id: 'evil' }, 'plugin.other'), null);
+    assert.equal(window.feedBack.playerContexts.getActive('panel').song_id, 'song.feedpak',
+        'a cross-source updateActive must leave the owned context untouched');
+
+    // The owning producer can still mutate its own context.
+    const updated = window.feedBack.playerContexts.updateActive('panel', { song_id: 'next.feedpak' }, 'plugin.owner');
+    assert.equal(updated.song_id, 'next.feedpak');
+});
+
+test('a panel file with identical title/artist does not corrupt the main context (#104)', () => {
+    const window = load();
+    const highway = {
+        setMastery() {},
+        getSongInfo() { return { title: 'Same Title', artist: 'Same Artist', arrangement: 'Lead', arrangement_index: 0 }; },
+        getFilename() { return 'main.feedpak'; },
+    };
+    window.highway = highway;
+    window.v3Profile = { get: () => ({ id: 'alex', ready: true }) };
+    window.feedBack.currentSong = { filename: 'main.feedpak', title: 'Same Title', artist: 'Same Artist', arrangement: 'Lead', arrangementIndex: 0 };
+    window.feedBack.emit('song:loaded');
+    const before = window.feedBack.playerContexts.getActive('main');
+    assert.equal(before.song_id, 'main.feedpak');
+
+    // A split-screen panel loads a DIFFERENT file whose title/artist are
+    // identical — the old display-metadata comparison passed this through
+    // and the panel filename replaced the main player's song_id.
+    window.feedBack.currentSong = { filename: 'panel.feedpak', title: 'Same Title', artist: 'Same Artist', arrangement: 'Lead', arrangementIndex: 0 };
+    window.feedBack.emit('song:loaded');
+
+    assert.deepEqual(window.feedBack.playerContexts.getActive('main'), before,
+        'the main context must be untouched by a same-metadata panel file');
+});
+
+test('a same-file broadcast is accepted on filename provenance even with stale display metadata (#104)', () => {
+    // Pins the semantics: the filename is authoritative, not the title.
+    const window = load();
+    let arrangementIndex = 0;
+    const highway = {
+        setMastery() {},
+        getSongInfo() { return { title: 'Song', artist: 'Artist', arrangement: 'Lead', arrangement_index: arrangementIndex }; },
+        getFilename() { return 'song.feedpak'; },
+    };
+    window.highway = highway;
+    window.v3Profile = { get: () => ({ id: 'alex', ready: true }) };
+    window.feedBack.currentSong = { filename: 'song.feedpak', title: 'Song', artist: 'Artist', arrangement: 'Lead', arrangementIndex: 0 };
+    window.feedBack.emit('song:loaded');
+    assert.equal(window.feedBack.playerContexts.getActive('main').arrangement_id, '0');
+
+    // Same file, new arrangement; the broadcast metadata is stale/wrong but
+    // the filename matches main's own highway, so the update applies — and
+    // the arrangement comes from main's getSongInfo(), not the broadcast.
+    arrangementIndex = 2;
+    window.feedBack.currentSong = { filename: 'song.feedpak', title: 'Stale Title', artist: 'Stale Artist', arrangement: '?', arrangementIndex: 9 };
+    window.feedBack.emit('song:loaded');
+    const after = window.feedBack.playerContexts.getActive('main');
+    assert.equal(after.song_id, 'song.feedpak');
+    assert.equal(after.arrangement_id, '2');
+});
+
+test('a panel broadcast while the main highway holds no file publishes nothing (#104)', () => {
+    const window = load();
+    window.highway = {
+        setMastery() {},
+        getSongInfo() { return {}; },
+        getFilename() { return null; },
+    };
+    window.v3Profile = { get: () => ({ id: 'alex', ready: true }) };
+    window.feedBack.currentSong = { filename: 'panel.feedpak', title: 'Panel Song', artist: 'Panel Artist', arrangement: 'Lead', arrangementIndex: 0 };
+    window.feedBack.emit('song:loaded');
+    assert.equal(window.feedBack.playerContexts.getActive('main'), null,
+        'without a verifiable main filename a panel broadcast must not publish main');
 });
