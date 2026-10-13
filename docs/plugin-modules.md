@@ -76,9 +76,15 @@ authority for the whole graph.
 
 A migrated plugin *requires* a host new enough to serve `src/` and inject
 `type=module`. Declare the floor with `"minHost": "X.Y.Z"` in `plugin.json`.
-(R0 plumbs the field through `/api/plugins`; enforcement — refuse-with-message
-on an older host — is deferred, so bundled plugins are unaffected. Community
-plugins should state the floor and not migrate below it.)
+(R0 plumbed the field through `/api/plugins`; since feedBack#133 the host
+evaluates it at load time — prerelease-aware, so `0.3.0-alpha.10` really is
+newer than `0.3.0-alpha.2` — and records `min_host_status` on the row, warns
+once on a genuine mismatch, and carries both into the diagnostics bundle.
+It stays diagnostic-only: an older host still loads the plugin, so keep the
+feature-detect (`docs/plugin-host-compat.md`) as the mechanism and `minHost`
+as the human-readable floor. Absent floors and the legacy `1.0.0`
+placeholder are labelled, never enforced. Community plugins should state
+the floor and not migrate below it.)
 
 ## Migration mechanics
 

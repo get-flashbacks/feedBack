@@ -26,6 +26,7 @@ from pathlib import Path
 
 from diagnostics_hardware import collect as collect_hardware, detect_runtime
 from diagnostics_redact import Redactor
+from host_versions import min_host_status
 
 BUNDLE_SCHEMA = 1
 LOG_TAIL_BYTES = 5 * 1024 * 1024  # 5 MB
@@ -386,7 +387,8 @@ def _sanitize_remote_url(url: str) -> str:
     return sanitized
 
 
-def _system_plugins(loaded_plugins: list[dict], plugins_root: "Path | list[Path] | None" = None, redactor=None) -> dict:
+def _system_plugins(loaded_plugins: list[dict], plugins_root: "Path | list[Path] | None" = None, redactor=None,
+                     host_version: str | None = None) -> dict:
     """Build `system.plugins.v1`. Captures every loaded plugin with
     git/manifest info, AND every directory under each plugins root that
     contains a `plugin.json` so orphan / failed-to-load plugins still
@@ -418,12 +420,25 @@ def _system_plugins(loaded_plugins: list[dict], plugins_root: "Path | list[Path]
     for p in loaded_plugins:
         manifest = p.get("_manifest") or {}
         plugin_dir = p.get("_dir")
+        # minHost floor (feedBack#133): the raw floor plus the status the
+        # loader computed at startup (`min_host_status`: unset | placeholder
+        # | invalid | ok | unmet). Prefer the loader's value — it was
+        # evaluated against the version this host actually booted with;
+        # re-evaluate against this bundle's host version only for entries
+        # that predate the field. Optional keys: not a schema bump.
+        _min_host_raw = manifest.get("minHost")
+        _min_host_state = p.get("min_host_status")
+        if not isinstance(_min_host_state, str) or not _min_host_state:
+            _min_host_state = min_host_status(
+                _min_host_raw, host_version if isinstance(host_version, str) else "unknown")
         entry = {
             "id": p.get("id"),
             "name": p.get("name"),
             "version": manifest.get("version"),
             "type": p.get("type"),
             "loaded": True,
+            "min_host": _min_host_raw,
+            "min_host_status": _min_host_state,
             "has_screen": bool(p.get("has_screen")),
             "has_script": bool(p.get("has_script")),
             "has_settings": bool(p.get("has_settings")),
@@ -1042,7 +1057,8 @@ def _assemble_files_and_notes(
         files["system/version.json"] = ver_payload
         env_payload = _safe_json_dumps(_system_env(redactor=redactor)).encode("utf-8")
         files["system/env.json"] = env_payload
-        plugins_data = _system_plugins(loaded_plugins, plugins_root=plugins_root, redactor=redactor)
+        plugins_data = _system_plugins(loaded_plugins, plugins_root=plugins_root, redactor=redactor,
+                                     host_version=feedBack_version)
         files["system/plugins.json"] = _safe_json_dumps(plugins_data).encode("utf-8")
         # Plugin loading is async and takes a few seconds on cold
         # boot. If the bundle was captured during that window, every
