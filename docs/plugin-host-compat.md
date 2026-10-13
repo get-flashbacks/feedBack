@@ -268,10 +268,12 @@ the log rather than a bare traceback.
 
 ## Where the host does NOT help today
 
-- `minHost` is metadata passthrough only (`plugins/__init__.py` copies it to
-  `/api/plugins`); nothing under `static/` reads it, and it is not
-  feature-scoped. Do not rely on it, and do not encode a *feature* floor in it —
-  that is sub-issue 3/5.
+- `minHost` is diagnostic-only (feedBack#133): the loader evaluates it
+  against the running host and records `min_host_status` (`unset` |
+  `placeholder` | `invalid` | `ok` | `unmet`) on `/api/plugins` and in
+  the diagnostics bundle, warning once on `unmet`/`invalid` — but it
+  never blocks or degrades a plugin, and it is not feature-scoped. Do
+  not rely on it, and do not encode a *feature* floor in it.
 - Declaring a capability domain the host does not implement is not a load error.
   The declaration is intent; the runtime probe is the domain object, an
   `inspect()`, or the outcome of a dispatched command (any non-`handled`

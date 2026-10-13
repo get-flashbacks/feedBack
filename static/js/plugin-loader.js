@@ -16,6 +16,7 @@
 // The viz layer is now its own leaf module, so the seam is GONE — this imports it
 // directly, and the graph stays acyclic without any injection.
 import { _populateVizPicker } from './viz.js';
+import { minHostGaps } from './host-version.js';
 
 let _loadPluginsInFlight = false;
 const _pluginUiContributions = new Map();
@@ -147,6 +148,33 @@ export async function loadPlugins() {
         // from the response each round. Same invariant as the settings/screen
         // DOM wipe and _reconcilePluginStyles below.
         console.log('[feedBack] loadPlugins: got', plugins.length, 'plugins');
+
+        // minHost floor (feedBack#133): diagnostic-only, never a gate. The
+        // server evaluates every row at load time (`min_host_status`); warn
+        // once per session per unmet plugin, naming the plugin, the floor,
+        // and the running host, then load everything regardless. The warning
+        // lands in the console ring buffer, so it ships in the diagnostics
+        // bundle. Any failure here (version fetch, shape drift) is silent —
+        // the loader must never break on a diagnostic.
+        try {
+            const needsVersion = plugins.some((p) => p && (p.min_host_status === 'unmet'
+                || (p.min_host && !p.min_host_status)));
+            if (needsVersion && !window.feedBack._minHostWarned) {
+                const hostVersion = await fetch('/api/version')
+                    .then((r) => (r.ok ? r.json() : null))
+                    .then((d) => (d && typeof d.version === 'string' ? d.version.trim() : ''))
+                    .catch(() => '');
+                for (const gap of minHostGaps(plugins, hostVersion)) {
+                    console.warn(`[feedBack] ${gap.message}`);
+                }
+                window.feedBack._minHostWarned = true;
+            }
+        } catch (_e) {
+            // Diagnostic-only; never break plugin loading. Debug-log the
+            // skip (a real statement, not an empty catch) so a silent
+            // version-fetch failure is still visible with verbose logging.
+            console.debug('[feedBack] minHost diagnostic skipped:', _e?.message || _e);
+        }
 
         try {
             const capabilityApi = window.feedBack?.capabilities;

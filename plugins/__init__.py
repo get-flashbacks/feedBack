@@ -16,6 +16,8 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 
 from safepath import safe_join
 
+from host_versions import describe_min_host_gap, min_host_status
+
 log = logging.getLogger("feedBack.plugins")
 
 
@@ -283,6 +285,21 @@ def _normalize_manifest_mapping(value) -> dict:
 
 def _normalize_manifest_sequence(value) -> list:
     return value if isinstance(value, list) else []
+
+
+def _min_host_status_for_row(entry: dict) -> str:
+    """`min_host_status` for one `/api/plugins` row (feedBack#133).
+
+    Prefers the loader-computed value carried on the entry; stubbed
+    entries (built without `_nav_entry`, e.g. in tests) fall back to a
+    fresh evaluation of their manifest against an unknown host, which
+    fails open — `unset`/`placeholder`/`invalid` pass through, a real
+    floor reads `ok` rather than a spurious `unmet`.
+    """
+    status = entry.get("min_host_status")
+    if isinstance(status, str) and status:
+        return status
+    return min_host_status((entry.get("_manifest") or {}).get("minHost"), "unknown")
 
 
 _CAPABILITY_STANDARD = "capability-pipelines.v1"
@@ -1061,6 +1078,15 @@ def load_plugins(app: FastAPI, context: dict, progress_cb=None, route_setup_fn=N
     where `fn` is a zero-argument callable that performs the setup call.
     """
 
+    # Host version for the `minHost` diagnostic (feedBack#133). Passed in
+    # via `context["host_version"]` (server.py stamps `_running_version()` —
+    # the same chain `/api/version` serves). Absent (tests, dev reloads)
+    # → "unknown", which fails open: real floors read `ok` rather than
+    # crying mismatch against a version that was never supplied.
+    _host_version = context.get("host_version") if isinstance(context, dict) else None
+    if not isinstance(_host_version, str) or not _host_version.strip():
+        _host_version = "unknown"
+
     def _emit_progress(phase: str, message: str, plugin_id: str = "", loaded: int = 0,
                        total: int = 0, error: str | None = None,
                        clear_error: bool = False):
@@ -1406,6 +1432,26 @@ def load_plugins(app: FastAPI, context: dict, progress_cb=None, route_setup_fn=N
         # DAW-style plugin UIs that need the viewport, not a scrolling content
         # page. Strict `is True` so a stray truthy value can't silently opt in.
         _fullscreen = manifest.get("fullscreen") is True
+        # minHost floor (feedBack#133): diagnostic-only, never a gate. The
+        # status is computed once here against this pass's host version and
+        # carried on the entry so /api/plugins, the diagnostics bundle, and
+        # the frontend all read the same value. `unset` (absent/blank) and
+        # `placeholder` ("1.0.0") behave exactly as before — no warning, no
+        # comparison. `invalid` warns once (a typo must not silently become
+        # a floor); `unmet` warns once naming the gap. Loading proceeds in
+        # every case.
+        _min_host = manifest.get("minHost")
+        _min_host_state = min_host_status(_min_host, _host_version)
+        if _min_host_state == "unmet":
+            log.warning("%s", describe_min_host_gap(plugin_id, _min_host, _host_version))
+        elif _min_host_state == "invalid":
+            log.warning(
+                "Plugin %r declares minHost %r which is not a bare version "
+                "(e.g. \"0.3.0-alpha.2\") — ignoring it and loading anyway "
+                "(minHost is diagnostic-only; prefer feature detection, "
+                "see docs/plugin-host-compat.md).",
+                plugin_id, _min_host,
+            )
         return {
             "id": plugin_id,
             "name": manifest.get("name", plugin_id),
@@ -1424,10 +1470,13 @@ def load_plugins(app: FastAPI, context: dict, progress_cb=None, route_setup_fn=N
             "has_script": bool(manifest.get("script")),
             # Module-migration (R0): `scriptType:"module"` tells the loader to
             # inject screen.js as <script type="module">; `minHost` is the
-            # min core version a migrated plugin needs (passthrough only in R0 —
-            # enforcement is deferred to R4, master §4b). None when unset.
+            # min core version a migrated plugin needs. Diagnostic-only since
+            # #133: `min_host_status` is one of unset | placeholder | invalid
+            # | ok | unmet — computed once against this pass's host version
+            # (see above). None/pending entries always carry both keys.
             "script_type": manifest.get("scriptType"),
-            "min_host": manifest.get("minHost"),
+            "min_host": _min_host,
+            "min_host_status": _min_host_state,
             "has_settings": bool(manifest.get("settings")),
             "settings_category": _settings_category,
             # Drives the v3 shell's immersive (full-screen) mode for this
@@ -2146,9 +2195,12 @@ def register_plugin_api(app: FastAPI):
                 "has_script": p["has_script"],
                 # Module-migration passthrough (R0). Re-read from the manifest
                 # like `version` above so stubbed test entries (built without
-                # _nav_entry) don't need the key.
+                # _nav_entry) don't need the key. `min_host_status` prefers
+                # the loader-computed value and falls back to a fresh
+                # evaluation (unknown host → fail-open) for stubbed entries.
                 "script_type": (p.get("_manifest") or {}).get("scriptType"),
                 "min_host": (p.get("_manifest") or {}).get("minHost"),
+                "min_host_status": _min_host_status_for_row(p),
                 "has_settings": p["has_settings"],
                 # v3 immersive screen opt-in (full-screen plugin UI).
                 "fullscreen": p.get("fullscreen", False),
@@ -2205,6 +2257,7 @@ def register_plugin_api(app: FastAPI):
                 # Pending entries come from _nav_entry, so they carry these.
                 "script_type": e.get("script_type"),
                 "min_host": e.get("min_host"),
+                "min_host_status": _min_host_status_for_row(e),
                 "has_settings": e.get("has_settings", False),
                 "settings_category": e.get("settings_category"),
                 "fullscreen": e.get("fullscreen", False),

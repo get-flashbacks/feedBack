@@ -238,27 +238,43 @@ when pulling).
 | `v0.3.0-alpha.2-f7c761c` | `f7c761cf` (2026-09-17) | Row 5 (coordinated frames). Does NOT include row 6 (`playerContexts`) |
 | `v0.3.0-alpha.2-e5339c0` | `e5339c04` (2026-09-23) | **Baseline: all seven rows** (rolls up the 16-commit `f7c761c..e5339c0` window incl. row 6 + row 7) |
 
-## `minHost` is metadata, not enforcement
+## `minHost` is a diagnostic, not enforcement
 
-`minHost` is read in two places, both of them pure passthroughs into API
-metadata: `plugins/__init__.py:1430` and `:2151` copy it to `min_host` in
-`/api/plugins`. The loader's own comment says so — "passthrough only in R0 —
-enforcement is deferred to R4" — and nothing under `static/` reads it, so no
-frontend check compares it against the running host and no plugin is blocked or
-degraded on a mismatch. There is also no field in
-`docs/plugin-manifest.schema.json` for a **feature-scoped** dependency, so a
-plugin cannot say "feature A needs this host, feature B does not" in its
-manifest; it has to feature-detect in code, which is what every row above does.
+`minHost` is read at load time and evaluated against the running host,
+but it never blocks, skips, or degrades a plugin — every plugin loads
+regardless (feedBack#133). Each `/api/plugins` row carries the raw floor
+(`min_host`) plus `min_host_status`, one of:
+
+| Status | Meaning |
+|---|---|
+| `unset` | No `minHost` in the manifest — behaves exactly as before. |
+| `placeholder` | The `1.0.0` values existing manifests carry, which match no real dependency — labelled, never enforced. |
+| `invalid` | Not a bare version (ranges like `>=1.2`, typos) — ignored with a one-time startup warning so it can't silently become a floor. |
+| `ok` | A real floor at or below the running host. |
+| `unmet` | A real floor above the running host. |
+
+Comparison is prerelease-aware (`lib/host_versions.py`; mirrored in
+`static/js/host-version.js`): numeric prerelease identifiers compare
+numerically, so `0.3.0-alpha.2 < 0.3.0-alpha.10 < 0.3.0` — plain string
+comparison gets the middle pair backwards. An unreadable host version
+fails open to `ok`.
+
+An `unmet` floor produces two diagnostics naming the gap (what plugin,
+what it needs, what the host is): a one-time `log.warning` at startup
+and a one-time `console.warn` when the plugin list loads (which lands in
+the console ring buffer, so it ships in the diagnostics bundle).
+`system/plugins.json` in the bundle records `min_host` +
+`min_host_status` per plugin. Prefer feature detection over a declared
+floor (`docs/plugin-host-compat.md`) — `minHost` names the gap for
+humans; it is not a substitute for probing the API at the call site.
 
 Practical consequences:
 
-- A wrong or absent `minHost` costs nothing today and would mislead the first
-  host that does enforce it. Prefer feature detection over a declared floor.
+- A wrong or absent `minHost` still costs nothing at load time; a wrong
+  one now warns instead of passing silently.
 - Do not put a **plugin's** version in a `minHost` field. That conflation is
   exactly what Visual Export removed (it once read `1.14.8`, a Splitscreen
   version — see [#6](https://github.com/get-flashbacks/feedback-plugin-visual-export/issues/6)).
-- Making `minHost` actionable is sub-issue 3 of
-  [#102](https://github.com/get-flashbacks/feedBack/issues/102), not this one.
 
 ## How to check a build against a row
 

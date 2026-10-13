@@ -739,6 +739,10 @@ async def startup_events():
     plugin_context = {
         "config_dir": CONFIG_DIR,
         "get_dlc_dir": _get_dlc_dir,
+        # Host version for the loader's `minHost` diagnostic (feedBack#133):
+        # the same `_running_version()` chain `/api/version` serves, so the
+        # floor comparison and the navbar badge can never disagree.
+        "host_version": _running_version(),
         # Pass the DLC-root resolver (not its result) so loose-folder
         # metadata keeps its dlc-relative artist/album inference while the
         # lookup stays lazy — archive/sloppak extraction never reads config.
