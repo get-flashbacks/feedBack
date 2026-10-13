@@ -306,7 +306,7 @@ test('an override against a stale player context returns no-target and records n
 
     // The arrangement changed underneath us — the captured snapshot no
     // longer matches any current context.
-    window.feedBack.playerContexts.updateActive('player-1', { arrangement_id: 'rhythm' });
+    window.feedBack.playerContexts.updateActive('player-1', { arrangement_id: 'rhythm' }, 'plugin.splitscreen');
 
     const result = await dispatch(window, 'activate', 'plugin.section_practice', {
         player_context: context, difficulty_pct: 50, start_time: 0, end_time: 10,
@@ -355,7 +355,7 @@ test('clear with a stale player_context reports no-target instead of a fake rele
     // context-scoped clear matches nothing — and must say so rather than
     // report a `handled released: false` that reads like "still there,
     // nothing to do" or, worse, like it is still in force.
-    window.feedBack.playerContexts.updateActive('player-1', { arrangement_id: 'rhythm' });
+    window.feedBack.playerContexts.updateActive('player-1', { arrangement_id: 'rhythm' }, 'plugin.splitscreen');
     assert.equal(highway.override, null, 'core already released it on the context change');
 
     const stale = await dispatch(window, 'clear', 'plugin.section_practice', { player_context: context });
@@ -439,7 +439,7 @@ test('a replaced player context clears the override that referred to the old one
 
     // Arrangement switch: player-identity republishes the context, which
     // changes its key, so the captured override no longer resolves.
-    window.feedBack.playerContexts.updateActive('player-1', { arrangement_id: 'rhythm' });
+    window.feedBack.playerContexts.updateActive('player-1', { arrangement_id: 'rhythm' }, 'plugin.splitscreen');
 
     const snapshot = await dispatch(window, 'inspect', 'plugin.spectator');
     assert.deepEqual(snapshot.payload.active_overrides, []);

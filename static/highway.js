@@ -121,6 +121,22 @@ function createHighway() {
   // modules can close over it as a factory arg without cross-panel sharing.
   const hwState = {};
 
+  // This instance's chart filename, derived from its own WebSocket URL
+  // (feedBack#104). Each highway — main player or split-screen panel —
+  // connects to /ws/highway/<filename>, so the URL is per-instance
+  // provenance the server already authenticates (route-scoped file
+  // resolution). Null before connect() / after stop(). The player-identity
+  // capability reads this via api.getFilename() to accept only main-player
+  // events instead of inferring identity from title/artist display metadata.
+  function hwFilename() {
+      try {
+          const url = hwState.ws?.url || '';
+          const wsPath = url.split('/ws/highway/')[1] || '';
+          const filename = decodeURIComponent(wsPath.split('?')[0]);
+          return filename || null;
+      } catch (_) { return null; }
+  }
+
     // ── Stable, hwState-bound views of the carved primitives (R3c) ──────────────
     //
     // fretX and _noteState moved to ./js/highway-state-primitives.js and now take hwState as
@@ -2520,8 +2536,7 @@ function createHighway() {
                             }
                             // Plugin context API — broadcast current song state
                             if (window.feedBack) {
-                                const wsPath = hwState.ws.url.split('/ws/highway/')[1] || '';
-                                const filename = decodeURIComponent(wsPath.split('?')[0]);
+                                const filename = hwFilename() || '';
                                 window.feedBack.currentSong = {
                                     filename,
                                     title: msg.title,
@@ -2882,6 +2897,10 @@ function createHighway() {
             }));
         },
         getSongInfo() { return hwState.songInfo; },
+        // This instance's chart filename from its own WebSocket URL
+        // (feedBack#104) — per-instance provenance for the player-identity
+        // capability's mainSong() routing. Null before connect()/after stop().
+        getFilename() { return hwFilename(); },
         // Number of strings on the active arrangement
         // (feedBack-plugin-3dhighway#7). 4 for bass, 6 for guitar,
         // 7+ for extended-range GP imports. Plugins should size
