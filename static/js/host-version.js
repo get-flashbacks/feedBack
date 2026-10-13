@@ -28,6 +28,47 @@ function _parse(version) {
     return { core, pre };
 }
 
+// Numeric left-to-right core ordering (missing parts are zero).
+// Returns -1/0/1, or null when the cores tie and the prerelease decides.
+function _compareCores(coreA, coreB) {
+    const width = Math.max(coreA.length, coreB.length);
+    for (let i = 0; i < width; i++) {
+        const na = coreA[i] || 0;
+        const nb = coreB[i] || 0;
+        if (na !== nb) return na < nb ? -1 : 1;
+    }
+    return null;
+}
+
+// One prerelease-identifier step: numeric identifiers compare numerically
+// and sort below alphanumerics; alphanumerics compare lexically. Null
+// means this pair ties — keep walking.
+function _compareIdentifier(ia, ib) {
+    if (ia === ib) return null;
+    const na = typeof ia === 'number';
+    const nb = typeof ib === 'number';
+    if (na && nb) return ia < ib ? -1 : 1;
+    if (na) return -1;
+    if (nb) return 1;
+    return ia < ib ? -1 : 1;
+}
+
+// Prerelease ordering once the cores tie: a release sorts after any
+// prerelease of the same core; identifier lists compare element-wise,
+// then fall back to length.
+function _comparePrereleases(preA, preB) {
+    if (preA.length === 0 && preB.length === 0) return 0;
+    if (preA.length === 0) return 1;
+    if (preB.length === 0) return -1;
+    const n = Math.min(preA.length, preB.length);
+    for (let i = 0; i < n; i++) {
+        const step = _compareIdentifier(preA[i], preB[i]);
+        if (step !== null) return step;
+    }
+    if (preA.length === preB.length) return 0;
+    return preA.length < preB.length ? -1 : 1;
+}
+
 // Order two bare versions: -1 if a < b, 0 if equal, 1 if a > b.
 // Throws when either side is not a bare version — classify first.
 export function compareHostVersions(a, b) {
@@ -35,31 +76,9 @@ export function compareHostVersions(a, b) {
     const pb = _parse(b);
     if (!pa) throw new Error(`not a bare version: ${JSON.stringify(a)}`);
     if (!pb) throw new Error(`not a bare version: ${JSON.stringify(b)}`);
-    const width = Math.max(pa.core.length, pb.core.length);
-    for (let i = 0; i < width; i++) {
-        const na = pa.core[i] || 0;
-        const nb = pb.core[i] || 0;
-        if (na !== nb) return na < nb ? -1 : 1;
-    }
-    const rea = pa.pre.length === 0;
-    const reb = pb.pre.length === 0;
-    if (rea && reb) return 0;
-    if (rea) return 1; // a release sorts after its own prereleases
-    if (reb) return -1;
-    const n = Math.min(pa.pre.length, pb.pre.length);
-    for (let i = 0; i < n; i++) {
-        const ia = pa.pre[i];
-        const ib = pb.pre[i];
-        if (ia === ib) continue;
-        const na = typeof ia === 'number';
-        const nb = typeof ib === 'number';
-        if (na && nb) return ia < ib ? -1 : 1;
-        if (na) return -1; // numeric identifiers sort below alphanumerics
-        if (nb) return 1;
-        return ia < ib ? -1 : 1;
-    }
-    if (pa.pre.length === pb.pre.length) return 0;
-    return pa.pre.length < pb.pre.length ? -1 : 1;
+    const coreResult = _compareCores(pa.core, pb.core);
+    if (coreResult !== null) return coreResult;
+    return _comparePrereleases(pa.pre, pb.pre);
 }
 
 // Bucket a raw manifest `minHost`: unset | placeholder | real | invalid.
