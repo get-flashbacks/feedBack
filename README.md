@@ -161,6 +161,11 @@ result when you add new classes.
 is synced automatically when a desktop release is cut. `GET /api/version`
 serves it.
 
+Library-scan cost is measured and documented in
+[docs/scaling-envelope.md](docs/scaling-envelope.md) — per-song scan time,
+warm-rescan time, metadata-cache growth, and the per-worker memory footprint — so
+you can size a deployment (`FEEDBACK_MAX_SCAN_WORKERS`) instead of guessing.
+
 ---
 
 ## Contributing
