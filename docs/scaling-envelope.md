@@ -127,7 +127,9 @@ speed knob.
   server latency and boot numbers.
 - **Host-specific.** Wall times scale with CPU; the per-worker ~55 MB footprint is
   the interpreter + `scan_worker` import (roughly host-independent), and the DB
-  growth is data-shape-dependent.
+  growth is data-shape-dependent. The harness normalizes `ru_maxrss` units, which
+  are KiB on Linux but bytes on macOS/BSD, so the off-Linux fallback isn't ~1024×
+  off.
 - Absolute times are single-host, single-run; the *slope* (per-song cost) is the
   transferable number. Re-run on your target hardware before sizing.
 
